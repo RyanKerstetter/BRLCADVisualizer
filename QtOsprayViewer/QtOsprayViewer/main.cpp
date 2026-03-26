@@ -1,44 +1,42 @@
-#include <windows.h>
 #include <QApplication>
+#include <cstdio>
 
 #include <ospray/ospray.h>
 #include "mainwindow.h"
 
 int main(int argc, char *argv[])
 {
-  MessageBoxA(nullptr, "main start", "debug", MB_OK);
+  fprintf(stderr, "main start\n");
 
   int ac = argc;
   const char **av = const_cast<const char **>(argv);
 
   OSPError err = ospInit(&ac, av);
   if (err != OSP_NO_ERROR) {
-    MessageBoxA(nullptr, "ospInit failed", "OSPRay", MB_OK | MB_ICONERROR);
+    fprintf(stderr, "ospInit failed\n");
     return 1;
   }
 
-  MessageBoxA(nullptr, "ospInit ok", "debug", MB_OK);
+  fprintf(stderr, "ospInit ok\n");
 
   ospLoadModule("cpu");
-  MessageBoxA(nullptr, "cpu module loaded", "debug", MB_OK);
+  fprintf(stderr, "cpu module loaded\n");
 
- 
   int rc = 0;
   {
     QApplication a(argc, argv);
-    MessageBoxA(nullptr, "QApplication created", "debug", MB_OK);
+    fprintf(stderr, "QApplication created\n");
 
     MainWindow w;
-    MessageBoxA(nullptr, "MainWindow created", "debug", MB_OK);
+    fprintf(stderr, "MainWindow created\n");
 
     w.show();
-    MessageBoxA(nullptr, "MainWindow shown", "debug", MB_OK);
+    fprintf(stderr, "MainWindow shown\n");
 
     rc = a.exec();
-  }    
-      
+  }
 
-  MessageBoxA(nullptr, "event loop ended", "debug", MB_OK);
+  fprintf(stderr, "event loop ended\n");
 
   ospShutdown();
   return rc;
