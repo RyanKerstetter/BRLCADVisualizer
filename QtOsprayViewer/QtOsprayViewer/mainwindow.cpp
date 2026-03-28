@@ -4,6 +4,7 @@
 #include <QAction>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QInputDialog>
 #include <QMenuBar>
 #include <QMessageBox>
 
@@ -67,9 +68,18 @@ void MainWindow::setupMenus()
     }
 
     if (ext == "g") {
-      QMessageBox::information(this,
-          "Not Yet Implemented",
-          "BRL-CAD .g loading is planned next. OBJ loading works now.");
+      bool ok = false;
+      QString obj = QInputDialog::getText(this,
+          "Load BRL-CAD Object",
+          "Enter object name to render\n(e.g. \"component\", \"all.g\", or a region name):",
+          QLineEdit::Normal, QString(), &ok);
+      if (!ok)
+        return;
+      if (!renderWidget_->loadBrlcadModel(path, obj)) {
+        QMessageBox::warning(this, "Load Failed",
+            "Could not load BRL-CAD .g file.\n"
+            "Check that the object name exists in the database.");
+      }
       return;
     }
 

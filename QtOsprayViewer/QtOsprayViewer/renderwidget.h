@@ -28,6 +28,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   ~RenderWidget() override;
 
   bool loadModel(const QString &path);
+  bool loadBrlcadModel(const QString &path, const QString &topObject = QString());
   void resetView();
   void setInputMode(InputMode mode);
 

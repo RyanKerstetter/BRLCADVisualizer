@@ -68,9 +68,12 @@ if (EXISTS "${BRLCAD_INCLUDE_DIR}/OpenNURBS/opennurbs.h")
   list(APPEND BRLCAD_INCLUDE_DIRS "${BRLCAD_INCLUDE_DIR}/OpenNURBS")
 endif()
 
-target_include_directories(ospray_module_brl_cad PRIVATE ${BRLCAD_INCLUDE_DIRS})
+target_include_directories(ospray_module_brl_cad PRIVATE
+    ${BRLCAD_INCLUDE_DIRS}
+    "${CMAKE_CURRENT_SOURCE_DIR}/geometry"
+)
 
-include_directories_ispc(${RKCOMMON_INCLUDE_DIRS})
+include_directories_ispc(${RKCOMMON_INCLUDE_DIRS} ${OSPRAY_CPU_MODULE_INCLUDE_DIRS})
 
 # Required definitions for ISPC hybrid code for CPU
 add_definitions_ispc(
@@ -95,4 +98,9 @@ ispc_target_add_sources(ospray_module_brl_cad ${BRLCAD_MODULE_SOURCES})
 target_link_libraries(ospray_module_brl_cad
   PUBLIC ospray_module_cpu
   PRIVATE ${BRLCAD_LIBRT} ${BRLCAD_LIBBU} ${BRLCAD_LIBBN}
+)
+
+set_target_properties(ospray_module_brl_cad PROPERTIES
+  VERSION ${OSPRAY_VERSION}
+  SOVERSION ${OSPRAY_SOVERSION}
 )

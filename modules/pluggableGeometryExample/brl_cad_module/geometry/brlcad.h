@@ -19,8 +19,12 @@
 #include <string>
 #include <vector>
 
+// OSPRay 3.x geometry API
 #include "geometry/Geometry.h"
 #include "rkcommon/math/box.h"
+
+// Shared C++/ISPC struct for BRLCAD geometry
+#include "BRLCADShared.h"
 
 #undef UNUSED
 #undef _USE_MATH_DEFINES
@@ -28,15 +32,17 @@
 #include "brlcad/raytrace.h" /* librt interface definitions */
 #include "brlcad/vmath.h" /* vector math macros */
 
-// #include "embree2/rtcore_ray.h"
-
 #include <embree4/rtcore.h>
 #include <embree4/rtcore_ray.h>
 
 namespace ospray {
 namespace brlcad {
 
-struct BRLCAD : public ospray::Geometry
+// BRLCAD extends AddStructShared<Geometry, ispc::BRLCAD_sh> so that:
+//  - getSh() returns ispc::BRLCAD_sh* (which starts with ispc::Geometry super)
+//  - Geometry_dispatch_postIntersect / _intersect can use getSh()->super.*
+//  - BRLCAD_intersect (ISPC) reads getSh()->brlcadSelf to reach this object
+struct BRLCAD : public AddStructShared<Geometry, ispc::BRLCAD_sh>
 {
   BRLCAD(api::ISPCDevice &device);
   ~BRLCAD() override;
@@ -44,16 +50,14 @@ struct BRLCAD : public ospray::Geometry
   void commit() override;
   size_t numPrimitives() const override;
 
-  // Data members //
-
-  uint geomID{0};
+  // Scene bounds (populated in commit from BRL-CAD rtip)
   rkcommon::math::box3f bounds;
 
+  // BRL-CAD ray-trace instance
   application ap;
   rt_i *rtip{nullptr};
 
   mutable std::vector<resource> resources;
-
   std::vector<std::string> objects;
 };
 

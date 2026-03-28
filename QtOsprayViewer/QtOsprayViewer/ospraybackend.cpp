@@ -7,6 +7,11 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
 
+// BRL-CAD headers (C API, needs extern "C" guard)
+extern "C" {
+#include <brlcad/raytrace.h>
+}
+
 using rkcommon::math::vec3f;
 using rkcommon::math::vec3ui;
 using rkcommon::math::vec4f;
@@ -216,6 +221,63 @@ bool OsprayBackend::loadObj(const std::string &path)
 
   ospray::cpp::Group group;
   group.setParam("geometry", ospray::cpp::CopiedData(model));
+  group.commit();
+
+  ospray::cpp::Instance instance(group);
+  instance.commit();
+
+  world_ = ospray::cpp::World();
+  world_.setParam("instance", ospray::cpp::CopiedData(instance));
+
+  ospray::cpp::Light light("ambient");
+  light.commit();
+  world_.setParam("light", ospray::cpp::CopiedData(light));
+  world_.commit();
+
+  resetAccumulation();
+  return true;
+}
+
+bool OsprayBackend::loadBrlcad(const std::string &path, const std::string &topObject)
+{
+  // Create the custom brlcad geometry from the brl_cad OSPRay module.
+  // The module uses BRL-CAD's rt_shootray directly via Embree user geometry —
+  // no tessellation, exact CSG ray tracing.
+  ospray::cpp::Geometry geom("brlcad");
+  geom.setParam("filename", path);
+  if (!topObject.empty())
+    geom.setParam("objects", topObject);
+  geom.commit();
+
+  // Get scene bounds for camera positioning.
+  boundsMin_ = vec3f(-1.f, -1.f, -1.f);
+  boundsMax_ = vec3f( 1.f,  1.f,  1.f);
+  if (!topObject.empty()) {
+    struct rt_i *rtip = rt_dirbuild(path.c_str(), nullptr, 0);
+    if (rtip != RTI_NULL) {
+      const char *obj = topObject.c_str();
+      if (rt_gettrees(rtip, 1, &obj, 1) >= 0) {
+        rt_prep_parallel(rtip, 1);
+        boundsMin_ = vec3f((float)rtip->mdl_min[0],
+                           (float)rtip->mdl_min[1],
+                           (float)rtip->mdl_min[2]);
+        boundsMax_ = vec3f((float)rtip->mdl_max[0],
+                           (float)rtip->mdl_max[1],
+                           (float)rtip->mdl_max[2]);
+      } else {
+        fprintf(stderr, "loadBrlcad: object '%s' not found, using default bounds\n",
+                topObject.c_str());
+      }
+      rt_free_rti(rtip);
+    }
+  }
+
+  // Build OSPRay scene
+  ospray::cpp::GeometricModel gmodel(geom);
+  gmodel.commit();
+
+  ospray::cpp::Group group;
+  group.setParam("geometry", ospray::cpp::CopiedData(gmodel));
   group.commit();
 
   ospray::cpp::Instance instance(group);

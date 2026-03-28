@@ -24,6 +24,7 @@ class OsprayBackend
   const uint32_t *render();
 
   bool loadObj(const std::string &path);
+  bool loadBrlcad(const std::string &path, const std::string &topObject = "");
   void loadTestMesh();
 
   rkcommon::math::vec3f getBoundsCenter() const;

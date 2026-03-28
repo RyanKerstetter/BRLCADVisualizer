@@ -22,6 +22,9 @@ int main(int argc, char *argv[])
   ospLoadModule("cpu");
   fprintf(stderr, "cpu module loaded\n");
 
+  ospLoadModule("brl_cad");
+  fprintf(stderr, "brl_cad module loaded\n");
+
   int rc = 0;
   {
     QApplication a(argc, argv);

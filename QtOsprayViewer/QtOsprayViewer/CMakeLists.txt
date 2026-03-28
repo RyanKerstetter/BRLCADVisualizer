@@ -31,8 +31,8 @@ find_package(ospray REQUIRED CONFIG)
 # BRL-CAD
 set(BRLCAD_PREFIX "/usr/brlcad/rel-7.42.0" CACHE PATH "BRL-CAD prefix")
 find_path(BRLCAD_INCLUDE_DIR brlcad/rt/db4.h PATHS "${BRLCAD_PREFIX}/include" REQUIRED)
-find_library(BRLCAD_RT_LIBRARY  NAMES rt  PATHS "${BRLCAD_PREFIX}/lib" REQUIRED)
-find_library(BRLCAD_BU_LIBRARY  NAMES bu  PATHS "${BRLCAD_PREFIX}/lib" REQUIRED)
+find_library(BRLCAD_RT_LIBRARY  NAMES rt  PATHS "${BRLCAD_PREFIX}/lib" NO_DEFAULT_PATH REQUIRED)
+find_library(BRLCAD_BU_LIBRARY  NAMES bu  PATHS "${BRLCAD_PREFIX}/lib" NO_DEFAULT_PATH REQUIRED)
 
 qt_add_executable(QtOsprayViewer
     main.cpp
@@ -59,6 +59,8 @@ target_include_directories(QtOsprayViewer PRIVATE
     "${OSPRAY_PREFIX}/include"
     "${RKCOMMON_PREFIX}/include"
     "${BRLCAD_INCLUDE_DIR}"
+    "${BRLCAD_INCLUDE_DIR}/brlcad"
+    "${BRLCAD_INCLUDE_DIR}/OpenNURBS"
 )
 
 target_link_libraries(QtOsprayViewer PRIVATE

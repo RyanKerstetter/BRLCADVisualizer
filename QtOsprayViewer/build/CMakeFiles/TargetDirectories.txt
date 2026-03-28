@@ -1,0 +1,5 @@
+/home/adeeb/workspace/csce482/ospray-brlcad/QtOsprayViewer/build/CMakeFiles/QtOsprayViewer.dir
+/home/adeeb/workspace/csce482/ospray-brlcad/QtOsprayViewer/build/CMakeFiles/edit_cache.dir
+/home/adeeb/workspace/csce482/ospray-brlcad/QtOsprayViewer/build/CMakeFiles/rebuild_cache.dir
+/home/adeeb/workspace/csce482/ospray-brlcad/QtOsprayViewer/build/CMakeFiles/QtOsprayViewer_autogen_timestamp_deps.dir
+/home/adeeb/workspace/csce482/ospray-brlcad/QtOsprayViewer/build/CMakeFiles/QtOsprayViewer_autogen.dir

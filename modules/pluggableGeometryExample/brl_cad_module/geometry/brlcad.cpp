@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and      //
 // limitations under the License.                                           //
 // ======================================================================== //
-// RTC_GEOMETRY_TYPE_USER
+
 #include "brlcad.h"
 
 #include <atomic>
@@ -22,30 +22,29 @@
 #include <thread>
 #include <unordered_map>
 
+// Declare ISPC-exported function addresses (generated from brlcad.ispc).
+// ISPC exports use C linkage; extern "C" inside namespace ispc maps
+// the C symbol to the ispc:: namespace for C++ call sites.
+namespace ispc {
+extern "C" void *BRLCAD_postIntersect_addr();
+extern "C" void *BRLCAD_intersect_addr();
+} // namespace ispc
+
 namespace ospray {
 namespace brlcad {
+
+// ---------------------------------------------------------------------------
+// Thread-local CPU index for per-thread BRL-CAD resources
+// ---------------------------------------------------------------------------
 
 static inline int getCpuId()
 {
   return std::hash<std::thread::id>()(std::this_thread::get_id()) % MAX_PSW;
-#if 0
-      static std::unordered_map<std::thread::id, int> threadIds;
-      static std::atomic<int> nextId{1};
-      static std::mutex mtx;
-
-
-      mtx.lock();
-      const auto currentThread = std::this_thread::get_id();
-      auto id = threadIds[currentThread];
-      if (id == 0) {
-	id = ++nextId;
-	threadIds[currentThread] = id;
-      }
-      mtx.unlock();
-
-      return id - 1;
-#endif
 }
+
+// ---------------------------------------------------------------------------
+// CSV helper
+// ---------------------------------------------------------------------------
 
 static inline std::vector<std::string> splitCSV(const std::string &input)
 {
@@ -65,7 +64,9 @@ static inline int getNumThreads()
   return hc > 0 ? static_cast<int>(hc) : 1;
 }
 
-// Local helper functions /////////////////////////////////////////////////
+// ---------------------------------------------------------------------------
+// Embree ray-packet helpers
+// ---------------------------------------------------------------------------
 
 inline static void getRay(
     void *rayhitN, unsigned int N, unsigned int i, RTCRayHit &rayhit)
@@ -100,8 +101,6 @@ inline static void getRay(
 inline static void setRay(
     const RTCRayHit &rayhit, void *rayhitN, unsigned int N, unsigned int i)
 {
-  // Update to use RTCRayHit, which includes the RTCRay
-
   const auto &ray = rayhit.ray;
   const auto &hit = rayhit.hit;
 
@@ -127,39 +126,20 @@ inline static void setRay(
   }
 }
 
-static int hitCallback(application *ap, partition *PartHeadp, seg *segs)
-{
-  /* will contain surface curvature information at the entry */
-#if 0
-      curvature cur = RT_CURVATURE_INIT_ZERO;
-#endif
+// ---------------------------------------------------------------------------
+// BRL-CAD hit / miss callbacks
+// ---------------------------------------------------------------------------
 
+static int hitCallback(application *ap, partition *PartHeadp, seg * /*segs*/)
+{
   auto &rayhit = *static_cast<RTCRayHit *>(ap->a_uptr);
   auto &ray = rayhit.ray;
   auto &hit = rayhit.hit;
 
-  /* iterate over each partition until we get back to the head.
-   * each partition corresponds to a specific homogeneous region of
-   * material.
-   */
   for (auto *pp = PartHeadp->pt_forw; pp != PartHeadp; pp = pp->pt_forw) {
-    /* entry hit point, so we type less */
     auto *hitp = pp->pt_inhit;
-
-#if 0
-        /* construct the actual (entry) hit-point from the ray and the
-         * distance to the intersection point (i.e., the 't' value).
-         */
-        point_t pt;
-        VJOIN1(pt, ap->a_ray.r_pt, hitp->hit_dist, ap->a_ray.r_dir);
-#endif
-
-    /* primitive we encountered on entry */
     auto *stp = pp->pt_inseg->seg_stp;
 
-    /* compute the normal vector at the entry point, flipping the
-     * normal if necessary.
-     */
     vect_t inormal;
     RT_HIT_NORMAL(inormal, hitp, stp, &(ap->a_ray), pp->pt_inflip);
 
@@ -168,51 +148,22 @@ static int hitCallback(application *ap, partition *PartHeadp, seg *segs)
     hit.Ng_y = inormal[1];
     hit.Ng_z = inormal[2];
     return 1;
-
-    /* ...COLOR... */
-    // pp->pt_regionp->reg_mater->ma_color
-#if 0
-        /* This next macro fills in the curvature information which
-         * consists on a principle direction vector, and the inverse
-         * radii of curvature along that direction and perpendicular
-         * to it.  Positive curvature bends toward the outward
-         * pointing normal.
-         */
-        RT_CURVATURE(&cur, hitp, pp->pt_inflip, stp);
-
-        /* exit point, so we type less */
-        hitp = pp->pt_outhit;
-
-        /* construct the actual (exit) hit-point from the ray and the
-         * distance to the intersection point (i.e., the 't' value).
-         */
-        VJOIN1(pt, ap->a_ray.r_pt, hitp->hit_dist, ap->a_ray.r_dir);
-
-        /* primitive we exited from */
-        stp = pp->pt_outseg->seg_stp;
-
-        /* compute the normal vector at the exit point, flipping the
-         * normal if necessary.
-         */
-        vect_t onormal;
-        RT_HIT_NORMAL(onormal, hitp, stp, &(ap->a_ray), pp->pt_outflip);
-#endif
   }
 
-  // Return '1' for hit
   return 1;
 }
 
-static int missCallback(application *ap)
+static int missCallback(application * /*ap*/)
 {
-  // Return '0' for miss
   return 0;
 }
 
-static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit)
-{
-  // Update to use RTCRayHit, which includes the RTCRay
+// ---------------------------------------------------------------------------
+// Single-ray BRL-CAD trace (called per lane from brlcadIntersectN_C)
+// ---------------------------------------------------------------------------
 
+static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit, unsigned int geomID)
+{
   auto &ray = rayhit.ray;
   auto &hit = rayhit.hit;
   application ap;
@@ -239,113 +190,103 @@ static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit)
 
   auto didHit = rt_shootray(&ap);
   if (didHit) {
-    hit.geomID = geom.geomID;
+    hit.geomID = geomID;
     hit.primID = 0;
   }
 }
 
-// static void brlcadIntersect(
-//     const BRLCAD *geom_i, RTCRayHit &rayhit, size_t item)
-// {
-//   const BRLCAD &geom = geom_i[item];
-//   traceRay(geom, rayhit);
-// }
-
-// static void brlcadIntersectN(const int *valid, const BRLCAD *geom_i,
-//                              const RTCIntersectContext *context, RTCRayNp
-//                              *rays, size_t N, size_t item) {
-//   const BRLCAD &geom = geom_i[item];
-
-//   for (size_t i = 0; i < N; ++i) {
-//     if (valid[i]) {
-//       RTCRay ray;
-//       getRay(*rays, ray, i);
-//       traceRay(geom, ray);
-//       setRay(ray, *rays, i);
-//     }
-//   }
-// }
-static void brlcadIntersectN(const RTCIntersectFunctionNArguments *args)
-{
-  int *valid = args->valid;
-  unsigned int N = args->N;
-  void *rayhitN = args->rayhit;
-
-  const auto *geom = static_cast<const BRLCAD *>(args->geometryUserPtr);
-
-  for (size_t i = 0; i < N; ++i) {
-    if (!valid || valid[i]) {
-      RTCRayHit rayhit;
-      getRay(rayhitN, N, static_cast<unsigned int>(i), rayhit);
-      traceRay(*geom, rayhit);
-      setRay(rayhit, rayhitN, N, static_cast<unsigned int>(i));
-    }
-  }
-}
-
-static void brlcadOccludedN(const RTCOccludedFunctionNArguments *args)
-{
-  const int *valid = args->valid;
-  const unsigned int N = args->N;
-  RTCRayN *rayN = (RTCRayN *)args->ray;
-  const auto *geom = static_cast<const BRLCAD *>(args->geometryUserPtr);
-
-  for (unsigned int i = 0; i < N; ++i) {
-    if (valid && !valid[i])
-      continue;
-
-    RTCRayHit rayhit{};
-    // Build scalar ray from occlusion packet lane (RTCRayN layout).
-    rayhit.ray.org_x = RTCRayN_org_x(rayN, N, i);
-    rayhit.ray.org_y = RTCRayN_org_y(rayN, N, i);
-    rayhit.ray.org_z = RTCRayN_org_z(rayN, N, i);
-    rayhit.ray.dir_x = RTCRayN_dir_x(rayN, N, i);
-    rayhit.ray.dir_y = RTCRayN_dir_y(rayN, N, i);
-    rayhit.ray.dir_z = RTCRayN_dir_z(rayN, N, i);
-    rayhit.ray.tnear = RTCRayN_tnear(rayN, N, i);
-    rayhit.ray.tfar = RTCRayN_tfar(rayN, N, i);
-    rayhit.ray.time = RTCRayN_time(rayN, N, i);
-    rayhit.ray.mask = RTCRayN_mask(rayN, N, i);
-    rayhit.ray.id = 0;
-    rayhit.ray.flags = 0;
-    rayhit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
-    rayhit.hit.primID = RTC_INVALID_GEOMETRY_ID;
-    rayhit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
-
-    traceRay(*geom, rayhit);
-
-    // Embree occlusion convention: tfar = -inf means occluded
-    if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
-      RTCRayN_tfar(rayN, N, i) = -std::numeric_limits<float>::infinity();
-    }
-  }
-}
-
-// static void brlcadBounds(void *geom_i, size_t item, RTCBounds &bounds_o) {
-//   const auto &geom = ((const BRLCAD *)geom_i)[item];
-//   bounds_o.lower_x = geom.bounds.lower.x;
-//   bounds_o.lower_y = geom.bounds.lower.y;
-//   bounds_o.lower_z = geom.bounds.lower.z;
-//   bounds_o.upper_x = geom.bounds.upper.x;
-//   bounds_o.upper_y = geom.bounds.upper.y;
-//   bounds_o.upper_z = geom.bounds.upper.z;
-// }
+// ---------------------------------------------------------------------------
+// Embree bounds callback
+// geometryUserPtr = getSh() = ispc::BRLCAD_sh*  (set by
+// createEmbreeUserGeometry)
+// ---------------------------------------------------------------------------
 
 static void brlcadBounds(const struct RTCBoundsFunctionArguments *args)
 {
-  // Updated bounds function
-  const BRLCAD *geoms = (const BRLCAD *)args->geometryUserPtr;
+  const ispc::BRLCAD_sh *sh =
+      static_cast<const ispc::BRLCAD_sh *>(args->geometryUserPtr);
+  const BRLCAD *geom = static_cast<const BRLCAD *>(sh->brlcadSelf);
+
   RTCBounds *bounds_o = args->bounds_o;
-  const BRLCAD &geom = geoms[args->primID];
-  bounds_o->lower_x = geom.bounds.lower.x;
-  bounds_o->lower_y = geom.bounds.lower.y;
-  bounds_o->lower_z = geom.bounds.lower.z;
-  bounds_o->upper_x = geom.bounds.upper.x;
-  bounds_o->upper_y = geom.bounds.upper.y;
-  bounds_o->upper_z = geom.bounds.upper.z;
+  bounds_o->lower_x = geom->bounds.lower.x;
+  bounds_o->lower_y = geom->bounds.lower.y;
+  bounds_o->lower_z = geom->bounds.lower.z;
+  bounds_o->upper_x = geom->bounds.upper.x;
+  bounds_o->upper_y = geom->bounds.upper.y;
+  bounds_o->upper_z = geom->bounds.upper.z;
 }
 
-BRLCAD::BRLCAD(api::ISPCDevice &device) : Geometry(device, FFG_NONE) {}
+// ---------------------------------------------------------------------------
+// C bridge called from ISPC BRLCAD_intersect.
+// args->geometryUserPtr = getSh() = BRLCAD_sh* (not used here; geom via self)
+// ---------------------------------------------------------------------------
+
+extern "C" void brlcadIntersectN_C(void *self,
+    const RTCIntersectFunctionNArguments *args,
+    bool isOcclusionTest)
+{
+  const BRLCAD *geom = static_cast<const BRLCAD *>(self);
+  const unsigned int N = args->N;
+  const unsigned int geomID = args->geomID;
+
+  if (isOcclusionTest) {
+    // args was actually RTCOccludedFunctionNArguments* cast to intersect args.
+    // The 'rayhit' field maps to 'ray' in the occluded struct.
+    RTCRayN *rayN = (RTCRayN *)args->rayhit;
+    for (unsigned int i = 0; i < N; ++i) {
+      if (args->valid && !args->valid[i])
+        continue;
+
+      RTCRayHit rayhit{};
+      rayhit.ray.org_x = RTCRayN_org_x(rayN, N, i);
+      rayhit.ray.org_y = RTCRayN_org_y(rayN, N, i);
+      rayhit.ray.org_z = RTCRayN_org_z(rayN, N, i);
+      rayhit.ray.dir_x = RTCRayN_dir_x(rayN, N, i);
+      rayhit.ray.dir_y = RTCRayN_dir_y(rayN, N, i);
+      rayhit.ray.dir_z = RTCRayN_dir_z(rayN, N, i);
+      rayhit.ray.tnear = RTCRayN_tnear(rayN, N, i);
+      rayhit.ray.tfar = RTCRayN_tfar(rayN, N, i);
+      rayhit.ray.time = RTCRayN_time(rayN, N, i);
+      rayhit.ray.mask = RTCRayN_mask(rayN, N, i);
+      rayhit.ray.id = 0;
+      rayhit.ray.flags = 0;
+      rayhit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
+      rayhit.hit.primID = RTC_INVALID_GEOMETRY_ID;
+      rayhit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
+
+      traceRay(*geom, rayhit, geomID);
+
+      // Embree occlusion convention: tfar = -inf means occluded
+      if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID)
+        RTCRayN_tfar(rayN, N, i) = -std::numeric_limits<float>::infinity();
+    }
+  } else {
+    for (unsigned int i = 0; i < N; ++i) {
+      if (!args->valid || args->valid[i]) {
+        RTCRayHit rayhit;
+        getRay(args->rayhit, N, i, rayhit);
+        traceRay(*geom, rayhit, geomID);
+        setRay(rayhit, args->rayhit, N, i);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// BRLCAD class implementation
+// ---------------------------------------------------------------------------
+
+BRLCAD::BRLCAD(api::ISPCDevice &device)
+    : AddStructShared(device.getDRTDevice(), device, FFG_BOX)
+{
+#ifndef OSPRAY_TARGET_SYCL
+  getSh()->super.postIntersect =
+      reinterpret_cast<ispc::Geometry_postIntersectFct>(
+          ispc::BRLCAD_postIntersect_addr());
+  getSh()->super.intersect = reinterpret_cast<ispc::Geometry_IntersectFct>(
+      ispc::BRLCAD_intersect_addr());
+#endif
+}
 
 BRLCAD::~BRLCAD()
 {
@@ -417,25 +358,16 @@ void BRLCAD::commit()
   bounds.upper.y = rtip->mdl_max[1];
   bounds.upper.z = rtip->mdl_max[2];
 
-  if (embreeGeometry) {
-    rtcReleaseGeometry(embreeGeometry);
-    embreeGeometry = nullptr;
-  }
+  // Store C++ this pointer in the shared struct so the ISPC intersect function
+  // can reach back into this object via brlcadIntersectN_C.
+  getSh()->brlcadSelf = this;
 
-  RTCDevice device = getISPCDevice().getEmbreeDevice();
-  if (!device)
-    throw std::runtime_error("invalid Embree device");
-
-  RTCGeometry geometry = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_USER);
-  rtcSetGeometryUserPrimitiveCount(geometry, numPrimitives());
-  rtcSetGeometryUserData(geometry, this);
-  rtcSetGeometryBoundsFunction(geometry, brlcadBounds, nullptr);
-  rtcSetGeometryIntersectFunction(geometry, brlcadIntersectN);
-  rtcSetGeometryOccludedFunction(geometry, brlcadOccludedN);
-  rtcCommitGeometry(geometry);
-
-  embreeGeometry = geometry;
-  geomID = 0;
+  // Create an OSPRay-managed Embree user geometry.
+  // This sets geometryUserPtr = getSh() (the BRLCAD_sh*) and registers the
+  // bounds function. Geometry_dispatch_intersect/occluded (from World.ih) will
+  // call getSh()->super.intersect = BRLCAD_intersect for this geometry.
+  createEmbreeUserGeometry((RTCBoundsFunction)brlcadBounds);
+  getSh()->super.numPrimitives = static_cast<int>(numPrimitives());
 }
 
 } // namespace brlcad

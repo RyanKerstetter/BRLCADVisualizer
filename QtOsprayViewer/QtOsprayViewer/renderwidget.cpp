@@ -216,6 +216,15 @@ bool RenderWidget::loadModel(const QString &path)
   return true;
 }
 
+bool RenderWidget::loadBrlcadModel(const QString &path, const QString &topObject)
+{
+  if (!backend_.loadBrlcad(path.toStdString(), topObject.toStdString()))
+    return false;
+
+  resetView();
+  return true;
+}
+
 void RenderWidget::resetView()
 {
   center_ = backend_.getBoundsCenter();
