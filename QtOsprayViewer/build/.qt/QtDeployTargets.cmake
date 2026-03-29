@@ -1,2 +1,0 @@
-set(__QT_DEPLOY_TARGET_QtOsprayViewer_FILE /home/adeeb/workspace/csce482/ospray-brlcad/QtOsprayViewer/build/QtOsprayViewer)
-set(__QT_DEPLOY_TARGET_QtOsprayViewer_TYPE EXECUTABLE)
