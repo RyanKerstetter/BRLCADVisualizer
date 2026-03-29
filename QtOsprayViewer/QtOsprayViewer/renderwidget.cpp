@@ -229,7 +229,7 @@ void RenderWidget::paintGL()
   ImGui::Separator();
   ImGui::Text("Lighting");
 
-  if (ImGui::SliderInt("AO Samples", &backend_.getAoSamples(), 0, 8)) {
+  if (ImGui::SliderInt("AO Samples", &backend_.getAoSamples(), 0, 100)) {
     backend_.setAoSamples(backend_.getAoSamples());
     backend_.resetAccumulation();
     renderOnce();
