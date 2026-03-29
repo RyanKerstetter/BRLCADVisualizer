@@ -12,6 +12,7 @@
 #include <ospray/ospray_cpp/ext/rkcommon.h>
 #include "imgui.h"
 #include "ospraybackend.h"
+#include "interactioncontroller.h"
 
 class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
 {
@@ -24,6 +25,13 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
     Fly
   };
 
+  enum class ManipulationTarget
+  {
+    View,
+    Object
+  };
+
+  ManipulationTarget manipulationTarget_ = ManipulationTarget::View;
   explicit RenderWidget(QWidget *parent = nullptr);
   ~RenderWidget() override;
 
@@ -32,6 +40,12 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   QString lastError() const;
   void resetView();
   void setInputMode(InputMode mode);
+
+  void setObjectTransform(const rkcommon::math::affine3f &xfm);
+  rkcommon::math::affine3f objectTransform() const;
+  rkcommon::math::affine3f objectTransform_{rkcommon::math::one};
+
+  
 
  protected:
   void initializeGL() override;
@@ -58,6 +72,9 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   static rkcommon::math::vec3f normalizeVec(const rkcommon::math::vec3f &v);
   static rkcommon::math::vec3f crossVec(
       const rkcommon::math::vec3f &a, const rkcommon::math::vec3f &b);
+
+  void applyViewAction(const InteractionController::Result &result, const QPoint &delta);
+  void applyObjectAction(const InteractionController::Result &result, const QPoint &delta);
 
   OsprayBackend backend_;
   QImage image_;
