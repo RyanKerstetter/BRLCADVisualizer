@@ -30,8 +30,13 @@ class OsprayBackend
   rkcommon::math::vec3f getBoundsCenter() const;
   float getBoundsRadius() const;
 
+  rkcommon::math::vec3f getBoundsMin() const;
+  rkcommon::math::vec3f getBoundsMax() const;
+  float getBoundsMaxExtent() const;
+
   void setRenderer(const std::string &type);
   void setAoSamples(int samples);
+  
   const std::string &lastError() const;
 
   int width() const
@@ -44,6 +49,11 @@ class OsprayBackend
   }
     
   int& getAoSamples();
+
+ 
+
+  float lastFrameTimeMs() const;
+  float renderFPS() const;
 
  private:
   void setError(std::string message);
@@ -61,6 +71,6 @@ class OsprayBackend
 
   std::vector<uint32_t> pixels_;
   std::string lastError_;
-
+  float lastFrameTimeMs_ = 0.0f;
   
 };

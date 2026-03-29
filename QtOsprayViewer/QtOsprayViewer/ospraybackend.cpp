@@ -1,5 +1,5 @@
 #include "ospraybackend.h"
-
+#include <chrono>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -80,8 +80,11 @@ void OsprayBackend::resetAccumulation()
 const uint32_t *OsprayBackend::render()
 {
   fprintf(stderr, "render: begin\n");
+  auto start = std::chrono::high_resolution_clock::now();
   fb_.renderFrame(renderer_, camera_, world_);
+  auto end = std::chrono::high_resolution_clock::now();
   fprintf(stderr, "render: frame complete\n");
+  lastFrameTimeMs_ = std::chrono::duration<float, std::milli>(end - start).count();
 
   void *mapped = fb_.map(OSP_FB_COLOR);
   fprintf(stderr, "render: framebuffer mapped\n");
@@ -90,6 +93,36 @@ const uint32_t *OsprayBackend::render()
   fprintf(stderr, "render: end\n");
 
   return pixels_.data();
+}
+
+float OsprayBackend::lastFrameTimeMs() const
+{
+  return lastFrameTimeMs_;
+}
+
+float OsprayBackend::renderFPS() const
+{
+  if (lastFrameTimeMs_ <= 0.0001f)
+    return 0.0f;
+  return 1000.0f / lastFrameTimeMs_;
+}
+
+rkcommon::math::vec3f OsprayBackend::getBoundsMin() const
+{
+  return boundsMin_;
+}
+
+rkcommon::math::vec3f OsprayBackend::getBoundsMax() const
+{
+  return boundsMax_;
+}
+
+float OsprayBackend::getBoundsMaxExtent() const
+{
+  float dx = boundsMax_.x - boundsMin_.x;
+  float dy = boundsMax_.y - boundsMin_.y;
+  float dz = boundsMax_.z - boundsMin_.z;
+  return std::max(dx, std::max(dy, dz));
 }
 
 rkcommon::math::vec3f OsprayBackend::getBoundsCenter() const

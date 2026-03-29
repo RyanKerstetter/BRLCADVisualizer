@@ -47,6 +47,10 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   void focusInEvent(QFocusEvent *e) override;
   void focusOutEvent(QFocusEvent *e) override;
  private:
+  static float fitDistanceFromBounds(float maxExtent, float fovyDeg);
+  void syncFlyFromOrbit();
+  void syncOrbitFromFly();
+  float flyMoveFactor_ = 0.005f;
   void syncCameraToBackend();
   void renderOnce();
 

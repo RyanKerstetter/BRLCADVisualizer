@@ -31,6 +31,44 @@ RenderWidget::~RenderWidget()
   doneCurrent();
 }
 
+float RenderWidget::fitDistanceFromBounds(float maxExtent, float fovyDeg)
+{
+  if (maxExtent < 0.001f)
+    maxExtent = 1.0f;
+
+  float halfAngle = 0.5f * fovyDeg * 3.14159265f / 180.0f;
+  halfAngle = std::max(halfAngle, 0.05f);
+
+  return (0.5f * maxExtent) / std::tan(halfAngle) * 1.3f;
+}
+
+void RenderWidget::syncFlyFromOrbit()
+{
+  vec3f eye(center_.x + dist_ * std::cos(pitch_) * std::sin(yaw_),
+      center_.y + dist_ * std::sin(pitch_),
+      center_.z + dist_ * std::cos(pitch_) * std::cos(yaw_));
+
+  flyPos_ = eye;
+  flyYaw_ = yaw_;
+  flyPitch_ = pitch_;
+}
+
+void RenderWidget::syncOrbitFromFly()
+{
+  vec3f forward(-std::cos(flyPitch_) * std::sin(flyYaw_),
+      -std::sin(flyPitch_),
+      -std::cos(flyPitch_) * std::cos(flyYaw_));
+  forward = normalizeVec(forward);
+
+  vec3f eye = flyPos_;
+  center_ = vec3f(eye.x + forward.x * dist_,
+      eye.y + forward.y * dist_,
+      eye.z + forward.z * dist_);
+
+  yaw_ = flyYaw_;
+  pitch_ = flyPitch_;
+}
+
 float RenderWidget::clampf(float v, float lo, float hi)
 {
   return std::max(lo, std::min(hi, v));
@@ -88,9 +126,9 @@ void RenderWidget::syncCameraToBackend()
   } else {
     flyPitch_ = clampf(flyPitch_, -1.4f, 1.4f);
 
-    vec3f forward(std::cos(flyPitch_) * std::sin(flyYaw_),
-        std::sin(flyPitch_),
-        std::cos(flyPitch_) * std::cos(flyYaw_));
+    vec3f forward(-std::cos(flyPitch_) * std::sin(flyYaw_),
+        -std::sin(flyPitch_),
+        -std::cos(flyPitch_) * std::cos(flyYaw_));
 
     backend_.setCamera(flyPos_, flyPos_ + forward, up_, fovy_);
   }
@@ -151,9 +189,14 @@ void RenderWidget::paintGL()
   ImGui_ImplOpenGL3_NewFrame();
   ImGui::NewFrame();
 
-  ImGui::Begin("Viewer");
-  ImGui::Text("OSPRay Qt Viewer");
-  ImGui::Text("FPS: %.1f", io.Framerate);
+    ImGui::Begin("Viewer");
+
+  ImGui::Separator();
+  ImGui::Text("Stats");
+
+  ImGui::Text("UI FPS: %.1f", ImGui::GetIO().Framerate);
+  ImGui::Text("Render time: %.2f ms", backend_.lastFrameTimeMs());
+  ImGui::Text("Render FPS: %.1f", backend_.renderFPS());
   ImGui::Text("Resolution: %d x %d", width(), height());
 
   ImGui::Separator();
@@ -164,14 +207,23 @@ void RenderWidget::paintGL()
   if (ImGui::RadioButton("ao", rendererMode == 0)) {
     rendererMode = 0;
     backend_.setRenderer("ao");
+    backend_.resetAccumulation();
+    renderOnce();
+    update();
   }
   if (ImGui::RadioButton("SciVis", rendererMode == 1)) {
     rendererMode = 1;
     backend_.setRenderer("scivis");
+    backend_.resetAccumulation();
+    renderOnce();
+    update();
   }
   if (ImGui::RadioButton("PathTracer", rendererMode == 2)) {
     rendererMode = 2;
     backend_.setRenderer("pathtracer");
+    backend_.resetAccumulation();
+    renderOnce();
+    update();
   }
 
   ImGui::Separator();
@@ -179,6 +231,9 @@ void RenderWidget::paintGL()
 
   if (ImGui::SliderInt("AO Samples", &backend_.getAoSamples(), 0, 8)) {
     backend_.setAoSamples(backend_.getAoSamples());
+    backend_.resetAccumulation();
+    renderOnce();
+    update();
   }
 
   if (ImGui::Button("Reset View")) {
@@ -234,16 +289,17 @@ void RenderWidget::resetView()
 {
   center_ = backend_.getBoundsCenter();
 
-  float radius = backend_.getBoundsRadius();
-  if (radius < 0.001f)
-    radius = 1.0f;
+  float maxExtent = backend_.getBoundsMaxExtent();
+  if (maxExtent < 0.001f)
+    maxExtent = 1.0f;
 
   up_ = vec3f(0.f, 1.f, 0.f);
 
   yaw_ = 0.3f;
   pitch_ = 0.2f;
-  dist_ = radius * 3.0f;
   fovy_ = 60.0f;
+
+  dist_ = fitDistanceFromBounds(maxExtent, fovy_);
 
   flyPos_ = vec3f(center_.x, center_.y, center_.z - dist_);
   flyYaw_ = 0.f;
@@ -257,7 +313,17 @@ void RenderWidget::resetView()
 
 void RenderWidget::setInputMode(InputMode mode)
 {
+  if (mode == inputMode_)
+    return;
+
+  if (mode == InputMode::Fly && inputMode_ == InputMode::Orbit) {
+    syncFlyFromOrbit();
+  } else if (mode == InputMode::Orbit && inputMode_ == InputMode::Fly) {
+    syncOrbitFromFly();
+  }
+
   inputMode_ = mode;
+
   backend_.resetAccumulation();
   syncCameraToBackend();
   renderOnce();
@@ -370,8 +436,15 @@ void RenderWidget::wheelEvent(QWheelEvent *e)
     return;
 
   if (inputMode_ == InputMode::Orbit) {
+    float maxExtent = backend_.getBoundsMaxExtent();
+    if (maxExtent < 0.001f)
+      maxExtent = 1.0f;
+
+    float minDist = std::max(maxExtent * 1e-8f, 1e-8f);
+    float maxDist = std::max(maxExtent * 100.0f, 10.0f);
+
     dist_ *= std::pow(zoomFactor_, steps);
-    dist_ = clampf(dist_, 0.5f, 50.f);
+    dist_ = clampf(dist_, minDist, maxDist);
   } else {
     fovy_ *= std::pow(0.95f, steps);
     fovy_ = clampf(fovy_, 20.f, 90.f);
@@ -414,12 +487,16 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
   if (inputMode_ != InputMode::Fly)
     return;
 
-  vec3f forward = normalizeVec(vec3f(std::cos(flyPitch_) * std::sin(flyYaw_),
-      std::sin(flyPitch_),
-      std::cos(flyPitch_) * std::cos(flyYaw_)));
+  vec3f forward(-std::cos(flyPitch_) * std::sin(flyYaw_),
+      -std::sin(flyPitch_),
+      -std::cos(flyPitch_) * std::cos(flyYaw_));
   vec3f right = normalizeVec(crossVec(forward, up_));
 
-  float step = 0.2f;
+  float modelScale = backend_.getBoundsMaxExtent();
+  if (modelScale < 0.001f)
+    modelScale = 1.0f;
+
+  float step = modelScale * flyMoveFactor_;
 
   if (e->key() == Qt::Key_W)
     flyPos_ = vec3f(flyPos_.x + forward.x * step,
