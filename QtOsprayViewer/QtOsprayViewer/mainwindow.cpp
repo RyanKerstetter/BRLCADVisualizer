@@ -62,7 +62,10 @@ void MainWindow::setupMenus()
 
     if (ext == "obj") {
       if (!renderWidget_->loadModel(path)) {
-        QMessageBox::warning(this, "Load Failed", "Could not load OBJ file.");
+        const QString detail = renderWidget_->lastError();
+        QMessageBox::warning(this,
+            "Load Failed",
+            detail.isEmpty() ? "Could not load OBJ file." : detail);
       }
       return;
     }
@@ -76,9 +79,12 @@ void MainWindow::setupMenus()
       if (!ok)
         return;
       if (!renderWidget_->loadBrlcadModel(path, obj)) {
+        const QString detail = renderWidget_->lastError();
         QMessageBox::warning(this, "Load Failed",
-            "Could not load BRL-CAD .g file.\n"
-            "Check that the object name exists in the database.");
+            detail.isEmpty()
+                ? "Could not load BRL-CAD .g file.\n"
+                  "Check that the object name exists in the database."
+                : detail);
       }
       return;
     }

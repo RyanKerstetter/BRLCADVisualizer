@@ -26,4 +26,5 @@ if (OSPRAY_ENABLE_APPS_EXAMPLES)
   find_package(glfw3 REQUIRED)
 endif()
 
-add_all_subdirectories()
+# Disable apps (examples, tests, benchmarks)
+# add_subdirectory(apps)

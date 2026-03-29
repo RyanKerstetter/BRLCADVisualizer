@@ -1,0 +1,5 @@
+X:/bw/CMakeFiles/ospray_module_brl_cad.dir
+X:/bw/CMakeFiles/compile__.._modules_pluggableGeometryExample_brl_cad_module_geometry_brlcad.ispc.dir
+X:/bw/CMakeFiles/INSTALL.dir
+X:/bw/CMakeFiles/ALL_BUILD.dir
+X:/bw/CMakeFiles/ZERO_CHECK.dir

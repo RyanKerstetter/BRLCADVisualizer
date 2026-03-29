@@ -32,6 +32,7 @@ class OsprayBackend
 
   void setRenderer(const std::string &type);
   void setAoSamples(int samples);
+  const std::string &lastError() const;
 
   int width() const
   {
@@ -45,6 +46,8 @@ class OsprayBackend
   int& getAoSamples();
 
  private:
+  void setError(std::string message);
+
   int fbW_ = 1;
   int fbH_ = 1;
 
@@ -57,6 +60,7 @@ class OsprayBackend
   ospray::cpp::FrameBuffer fb_;
 
   std::vector<uint32_t> pixels_;
+  std::string lastError_;
 
   
 };

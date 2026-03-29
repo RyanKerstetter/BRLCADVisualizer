@@ -18,7 +18,7 @@ FetchContent_Declare(
   PATCH_COMMAND git reset --hard && git apply -v -p1 < ${CMAKE_CURRENT_SOURCE_DIR}/imgui.patch
 )
 
-FetchContent_MakeAvailable(imgui)
+return()
 
 mark_as_advanced(FETCHCONTENT_BASE_DIR)
 mark_as_advanced(FETCHCONTENT_FULLY_DISCONNECTED)

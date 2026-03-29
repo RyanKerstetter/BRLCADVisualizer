@@ -28,6 +28,8 @@
 #
 add_library(ospray_module_brl_cad SHARED)
 
+target_compile_definitions(ospray_module_brl_cad PRIVATE OBJECTFACTORY_IMPORT)
+
 set(BRLCAD_ROOT "" CACHE PATH "Path to BRL-CAD installation prefix")
 
 find_path(BRLCAD_INCLUDE_DIR

@@ -1,0 +1,10 @@
+^C:\BRLCADVISUALIZER\BRL_CAD_STANDALONE\BUILD-WIN\CMAKEFILES\044CBF6F94DD39750338D76789DB4D25\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/BRLCADVisualizer/brl_cad_standalone -BC:/BRLCADVisualizer/brl_cad_standalone/build-win --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/BRLCADVisualizer/brl_cad_standalone/build-win/ospray_module_brl_cad.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

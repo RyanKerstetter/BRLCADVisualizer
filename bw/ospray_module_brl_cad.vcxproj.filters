@@ -1,0 +1,42 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="X:\modules\pluggableGeometryExample\brl_cad_module\geometry\brlcad.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="X:\modules\pluggableGeometryExample\brl_cad_module\moduleInit.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="X:\brl_cad_standalone\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Object Include="X:\bw\_\modules\pluggableGeometryExample\brl_cad_module\geometry\brlcad.dev.obj">
+      <Filter>Object Files</Filter>
+    </Object>
+    <Object Include="X:\bw\_\modules\pluggableGeometryExample\brl_cad_module\geometry\brlcad.dev_sse4.obj">
+      <Filter>Object Files</Filter>
+    </Object>
+    <Object Include="X:\bw\_\modules\pluggableGeometryExample\brl_cad_module\geometry\brlcad.dev_avx.obj">
+      <Filter>Object Files</Filter>
+    </Object>
+    <Object Include="X:\bw\_\modules\pluggableGeometryExample\brl_cad_module\geometry\brlcad.dev_avx2.obj">
+      <Filter>Object Files</Filter>
+    </Object>
+    <Object Include="X:\bw\_\modules\pluggableGeometryExample\brl_cad_module\geometry\brlcad.dev_avx512skx.obj">
+      <Filter>Object Files</Filter>
+    </Object>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{40031341-E7D9-3F61-9875-CB6A5A0F0D52}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Object Files">
+      <UniqueIdentifier>{61429769-7681-3E63-9933-6F56D8FACFD4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{DFE8AA2A-8816-3D6F-B130-AEF5AA2041EF}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

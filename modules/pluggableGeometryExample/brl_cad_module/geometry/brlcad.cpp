@@ -17,6 +17,7 @@
 #include "brlcad.h"
 
 #include <atomic>
+#include <cstdio>
 #include <limits>
 #include <sstream>
 #include <thread>
@@ -39,7 +40,9 @@ namespace brlcad {
 
 static inline int getCpuId()
 {
-  return std::hash<std::thread::id>()(std::this_thread::get_id()) % MAX_PSW;
+  static std::atomic<int> nextCpuId{0};
+  thread_local int cpuId = nextCpuId.fetch_add(1);
+  return cpuId;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +66,8 @@ static inline int getNumThreads()
   const unsigned int hc = std::thread::hardware_concurrency();
   return hc > 0 ? static_cast<int>(hc) : 1;
 }
+
+static std::atomic<int> g_traceLogBudget{12};
 
 // ---------------------------------------------------------------------------
 // Embree ray-packet helpers
@@ -147,6 +152,8 @@ static int hitCallback(application *ap, partition *PartHeadp, seg * /*segs*/)
     hit.Ng_x = inormal[0];
     hit.Ng_y = inormal[1];
     hit.Ng_z = inormal[2];
+    hit.geomID = static_cast<unsigned int>(ap->a_user);
+    hit.primID = 0;
     return 1;
   }
 
@@ -172,7 +179,11 @@ static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit, unsigned int geomID)
 
   ap.a_rt_i = geom.rtip;
   ap.a_onehit = 1;
-  ap.a_resource = &geom.resources[getCpuId()];
+  const size_t resourceIndex =
+      geom.resources.empty() ? 0 : (size_t(getCpuId()) % geom.resources.size());
+  ap.a_resource =
+      geom.resources.empty() ? nullptr : const_cast<resource *>(&geom.resources[resourceIndex]);
+  ap.a_user = static_cast<int>(geomID);
 
   VSET(ap.a_ray.r_pt, ray.org_x, ray.org_y, ray.org_z);
   VSET(ap.a_ray.r_dir, ray.dir_x, ray.dir_y, ray.dir_z);
@@ -188,10 +199,40 @@ static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit, unsigned int geomID)
   hit.geomID = RTC_INVALID_GEOMETRY_ID;
   hit.primID = RTC_INVALID_GEOMETRY_ID;
 
+  const int logIndex = g_traceLogBudget.fetch_sub(1);
+  if (logIndex > 0) {
+    fprintf(stderr,
+        "traceRay[%d]: org=(%f,%f,%f) dir=(%f,%f,%f) tnear=%f tfar=%f resource=%zu\n",
+        logIndex,
+        ray.org_x,
+        ray.org_y,
+        ray.org_z,
+        ray.dir_x,
+        ray.dir_y,
+        ray.dir_z,
+        ray.tnear,
+        ray.tfar,
+        resourceIndex);
+    fflush(stderr);
+  }
+
+  if (logIndex > 0) {
+    fprintf(stderr, "traceRay[%d]: before rt_shootray\n", logIndex);
+    fflush(stderr);
+  }
   auto didHit = rt_shootray(&ap);
-  if (didHit) {
-    hit.geomID = geomID;
-    hit.primID = 0;
+  if (logIndex > 0) {
+    fprintf(stderr, "traceRay[%d]: after rt_shootray didHit=%d geomID=%u tfar=%f\n",
+        logIndex,
+        didHit,
+        hit.geomID,
+        ray.tfar);
+    fflush(stderr);
+  }
+  if (didHit <= 0) {
+    hit.geomID = RTC_INVALID_GEOMETRY_ID;
+    hit.primID = RTC_INVALID_GEOMETRY_ID;
+    return;
   }
 }
 
@@ -226,6 +267,7 @@ extern "C" void brlcadIntersectN_C(void *self,
     bool isOcclusionTest)
 {
   const BRLCAD *geom = static_cast<const BRLCAD *>(self);
+
   const unsigned int N = args->N;
   const unsigned int geomID = args->geomID;
 
@@ -279,6 +321,8 @@ extern "C" void brlcadIntersectN_C(void *self,
 BRLCAD::BRLCAD(api::ISPCDevice &device)
     : AddStructShared(device.getDRTDevice(), device, FFG_BOX)
 {
+  fprintf(stderr, "BRLCAD constructor called\n");
+  fflush(stderr);
 #ifndef OSPRAY_TARGET_SYCL
   getSh()->super.postIntersect =
       reinterpret_cast<ispc::Geometry_postIntersectFct>(
@@ -317,19 +361,28 @@ void BRLCAD::commit()
     throw std::runtime_error("BRL-CAD geometry requires 'filename' parameter");
 
   std::string objectList = getParam<std::string>("objects", "all");
+  const int nThreads = getNumThreads();
 
+  fprintf(stderr, "=== BRLCAD::commit START ===\n");
+  fprintf(stderr, "[C1] filename=%s\n", filename.c_str());
+  fprintf(stderr, "[C2] objects=%s\n", objectList.c_str());
+  fprintf(stderr, "[C3] nThreads=%d\n", nThreads);
+  fflush(stderr);
+
+  //
+
+  fprintf(stderr, "[C4] rt_dirbuild\n");
   rtip = rt_dirbuild(filename.c_str(), nullptr, 0);
+  fprintf(stderr, "[C4 %s]\n", rtip ? "OK" : "FAIL");
+  fflush(stderr);
+
   if (rtip == nullptr)
     throw std::runtime_error("Failed to open BRL-CAD database: " + filename);
 
-  const int nThreads = getNumThreads();
-
-  std::cout << "nthreads is " << nThreads << std::endl;
-
   resources.clear();
-  resources.resize(MAX_PSW);
-  for (int i = 0; i < MAX_PSW; ++i)
-    rt_init_resource(&resources[i], i, rtip);
+
+  fprintf(stderr, "[C5] rt_gettrees\n");
+  fflush(stderr);
 
   objects.clear();
   auto objNames = splitCSV(objectList);
@@ -349,7 +402,13 @@ void BRLCAD::commit()
     objects.emplace_back(allObj);
   }
 
+  fprintf(stderr, "[C6] rt_prep_parallel\n");
   rt_prep_parallel(rtip, nThreads);
+  fprintf(stderr, "[C6 OK]\n");
+
+  resources.resize(nThreads);
+  for (int i = 0; i < nThreads; ++i)
+    rt_init_resource(&resources[i], i, rtip);
 
   bounds.lower.x = rtip->mdl_min[0];
   bounds.lower.y = rtip->mdl_min[1];
@@ -358,17 +417,24 @@ void BRLCAD::commit()
   bounds.upper.y = rtip->mdl_max[1];
   bounds.upper.z = rtip->mdl_max[2];
 
-  // Store C++ this pointer in the shared struct so the ISPC intersect function
-  // can reach back into this object via brlcadIntersectN_C.
+  fprintf(stderr,
+      "[C7] bounds min=(%f,%f,%f) max=(%f,%f,%f)\n",
+      bounds.lower.x,
+      bounds.lower.y,
+      bounds.lower.z,
+      bounds.upper.x,
+      bounds.upper.y,
+      bounds.upper.z);
+
   getSh()->brlcadSelf = this;
-
-  // Create an OSPRay-managed Embree user geometry.
-  // This sets geometryUserPtr = getSh() (the BRLCAD_sh*) and registers the
-  // bounds function. Geometry_dispatch_intersect/occluded (from World.ih) will
-  // call getSh()->super.intersect = BRLCAD_intersect for this geometry.
+  fprintf(stderr, "[C8] createEmbreeUserGeometry\n");
   createEmbreeUserGeometry((RTCBoundsFunction)brlcadBounds);
-  getSh()->super.numPrimitives = static_cast<int>(numPrimitives());
-}
+  fprintf(stderr, "[C8 OK]\n");
 
+  getSh()->super.numPrimitives = static_cast<int>(numPrimitives());
+  g_traceLogBudget.store(12);
+  fprintf(stderr, "=== BRLCAD::commit SUCCESS ===\n");
+  fflush(stderr);
+}
 } // namespace brlcad
 } // namespace ospray

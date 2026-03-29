@@ -60,6 +60,8 @@ add_library(ospray_module_brl_cad SHARED
     "${MODULE_DIR}/moduleInit.cpp"
 )
 
+target_compile_definitions(ospray_module_brl_cad PRIVATE OBJECTFACTORY_IMPORT)
+
 # Compile brlcad.ispc and add resulting objects to the library.
 # ispc_compile prepends CMAKE_CURRENT_SOURCE_DIR, so pass a relative path.
 file(RELATIVE_PATH BRLCAD_ISPC_REL
@@ -88,7 +90,9 @@ target_include_directories(ospray_module_brl_cad PRIVATE
 )
 
 target_link_libraries(ospray_module_brl_cad PRIVATE
+    ospray::ospray
     ospray::ospray_module_cpu
+    rkcommon::rkcommon
     ${BRLCAD_LIBRT}
     ${BRLCAD_LIBBU}
     ${BRLCAD_LIBBN}

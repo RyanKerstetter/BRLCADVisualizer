@@ -29,7 +29,11 @@ list(APPEND CMAKE_PREFIX_PATH "${OSPRAY_PREFIX}" "${RKCOMMON_PREFIX}")
 find_package(ospray REQUIRED CONFIG)
 
 # BRL-CAD
-set(BRLCAD_PREFIX "/usr/brlcad/rel-7.42.0" CACHE PATH "BRL-CAD prefix")
+if(WIN32)
+    set(BRLCAD_PREFIX "C:/brlcad-build" CACHE PATH "BRL-CAD prefix")
+else()
+    set(BRLCAD_PREFIX "/usr/brlcad/rel-7.42.0" CACHE PATH "BRL-CAD prefix")
+endif()
 find_path(BRLCAD_INCLUDE_DIR brlcad/rt/db4.h PATHS "${BRLCAD_PREFIX}/include" REQUIRED)
 find_library(BRLCAD_RT_LIBRARY  NAMES rt  PATHS "${BRLCAD_PREFIX}/lib" NO_DEFAULT_PATH REQUIRED)
 find_library(BRLCAD_BU_LIBRARY  NAMES bu  PATHS "${BRLCAD_PREFIX}/lib" NO_DEFAULT_PATH REQUIRED)
@@ -78,6 +82,51 @@ if(WIN32)
             "C:/ospray/build/install/ospray/bin"
             "$<TARGET_FILE_DIR:QtOsprayViewer>"
     )
+    add_custom_command(TARGET QtOsprayViewer POST_BUILD
+        COMMAND "C:/Qt/6.10.2/msvc2022_64/bin/windeployqt.exe"
+                "$<TARGET_FILE:QtOsprayViewer>"
+        COMMENT "Running windeployqt..."
+    )
+endif()
+
+
+if(WIN32)
+    add_custom_command(TARGET QtOsprayViewer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "C:/ospray/build/install/ospray/bin"
+            "$<TARGET_FILE_DIR:QtOsprayViewer>"
+        COMMENT "Copying OSPRay runtime DLLs..."
+    )
+
+    add_custom_command(TARGET QtOsprayViewer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "C:/ospray/build/install/rkcommon/bin"
+            "$<TARGET_FILE_DIR:QtOsprayViewer>"
+        COMMENT "Copying rkcommon runtime DLLs..."
+    )
+
+    add_custom_command(TARGET QtOsprayViewer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "C:/ospray/build/install/embree/bin"
+            "$<TARGET_FILE_DIR:QtOsprayViewer>"
+        COMMENT "Copying Embree runtime DLLs..."
+    )
+
+    add_custom_command(TARGET QtOsprayViewer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "C:/openvkl-install-x64/bin"
+            "$<TARGET_FILE_DIR:QtOsprayViewer>"
+        COMMENT "Copying Open VKL runtime DLLs..."
+    )
+
+
+    add_custom_command(TARGET QtOsprayViewer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "C:/brlcad-build/bin"
+            "$<TARGET_FILE_DIR:QtOsprayViewer>"
+        COMMENT "Copying BRL-CAD runtime DLLs..."
+    )
+
     add_custom_command(TARGET QtOsprayViewer POST_BUILD
         COMMAND "C:/Qt/6.10.2/msvc2022_64/bin/windeployqt.exe"
                 "$<TARGET_FILE:QtOsprayViewer>"

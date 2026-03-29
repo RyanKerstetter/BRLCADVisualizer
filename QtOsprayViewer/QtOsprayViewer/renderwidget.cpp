@@ -225,6 +225,11 @@ bool RenderWidget::loadBrlcadModel(const QString &path, const QString &topObject
   return true;
 }
 
+QString RenderWidget::lastError() const
+{
+  return QString::fromStdString(backend_.lastError());
+}
+
 void RenderWidget::resetView()
 {
   center_ = backend_.getBoundsCenter();

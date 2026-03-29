@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <exception>
 
+#include <ospray/ospray.h>
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
 
@@ -17,6 +19,18 @@ using rkcommon::math::vec3ui;
 using rkcommon::math::vec4f;
 
 int aoSamples_ = 1;
+
+namespace {
+std::string trimCopy(const std::string &value)
+{
+  const auto first = value.find_first_not_of(" \t\r\n");
+  if (first == std::string::npos)
+    return {};
+
+  const auto last = value.find_last_not_of(" \t\r\n");
+  return value.substr(first, last - first + 1);
+}
+}
 
 void OsprayBackend::init()
 {
@@ -65,11 +79,15 @@ void OsprayBackend::resetAccumulation()
 
 const uint32_t *OsprayBackend::render()
 {
+  fprintf(stderr, "render: begin\n");
   fb_.renderFrame(renderer_, camera_, world_);
+  fprintf(stderr, "render: frame complete\n");
 
   void *mapped = fb_.map(OSP_FB_COLOR);
+  fprintf(stderr, "render: framebuffer mapped\n");
   std::memcpy(pixels_.data(), mapped, pixels_.size() * sizeof(uint32_t));
   fb_.unmap(mapped);
+  fprintf(stderr, "render: end\n");
 
   return pixels_.data();
 }
@@ -146,15 +164,21 @@ void OsprayBackend::loadTestMesh()
 
 bool OsprayBackend::loadObj(const std::string &path)
 {
+  lastError_.clear();
+
   tinyobj::ObjReader reader;
   tinyobj::ObjReaderConfig config;
   config.triangulate = true;
 
-  if (!reader.ParseFromFile(path, config))
+  if (!reader.ParseFromFile(path, config)) {
+    setError("Could not parse OBJ file: " + path);
     return false;
+  }
 
-  if (!reader.Error().empty())
+  if (!reader.Error().empty()) {
+    setError(reader.Error());
     return false;
+  }
 
   const auto &attrib = reader.GetAttrib();
   const auto &shapes = reader.GetShapes();
@@ -196,8 +220,10 @@ bool OsprayBackend::loadObj(const std::string &path)
     }
   }
 
-  if (vertices.empty() || indices.empty())
+  if (vertices.empty() || indices.empty()) {
+    setError("OBJ file did not contain any triangulated mesh data.");
     return false;
+  }
 
   boundsMin_ = vertices[0];
   boundsMax_ = vertices[0];
@@ -238,60 +264,104 @@ bool OsprayBackend::loadObj(const std::string &path)
   return true;
 }
 
-bool OsprayBackend::loadBrlcad(const std::string &path, const std::string &topObject)
-{
-  // Create the custom brlcad geometry from the brl_cad OSPRay module.
-  // The module uses BRL-CAD's rt_shootray directly via Embree user geometry —
-  // no tessellation, exact CSG ray tracing.
-  ospray::cpp::Geometry geom("brlcad");
-  geom.setParam("filename", path);
-  if (!topObject.empty())
-    geom.setParam("objects", topObject);
-  geom.commit();
 
-  // Get scene bounds for camera positioning.
-  boundsMin_ = vec3f(-1.f, -1.f, -1.f);
-  boundsMax_ = vec3f( 1.f,  1.f,  1.f);
-  if (!topObject.empty()) {
-    struct rt_i *rtip = rt_dirbuild(path.c_str(), nullptr, 0);
-    if (rtip != RTI_NULL) {
-      const char *obj = topObject.c_str();
-      if (rt_gettrees(rtip, 1, &obj, 1) >= 0) {
-        rt_prep_parallel(rtip, 1);
-        boundsMin_ = vec3f((float)rtip->mdl_min[0],
-                           (float)rtip->mdl_min[1],
-                           (float)rtip->mdl_min[2]);
-        boundsMax_ = vec3f((float)rtip->mdl_max[0],
-                           (float)rtip->mdl_max[1],
-                           (float)rtip->mdl_max[2]);
-      } else {
-        fprintf(stderr, "loadBrlcad: object '%s' not found, using default bounds\n",
-                topObject.c_str());
-      }
-      rt_free_rti(rtip);
-    }
+bool OsprayBackend::loadBrlcad(
+    const std::string &path, const std::string &topObject)
+{
+  lastError_.clear();
+  fprintf(stderr, "loadBrlcad: START\n");
+  fprintf(stderr, "loadBrlcad: path = %s\n", path.c_str());
+  fprintf(stderr, "loadBrlcad: object = %s\n", topObject.c_str());
+
+  // STEP 1: Create geometry
+  fprintf(stderr, "STEP 1: Creating OSPRay brlcad geometry\n");
+
+  OSPGeometry rawGeom = ospNewGeometry("brlcad");
+  fprintf(stderr, "geom handle = %p\n", (void *)rawGeom);
+  fflush(stderr);
+
+  if (!rawGeom) {
+    setError("OSPRay could not create geometry type 'brlcad'. "
+             "The BRL-CAD module loaded, but the active device did not create the custom geometry.");
+    fprintf(stderr, "ERROR: %s\n", lastError_.c_str());
+    return false;
   }
 
-  // Build OSPRay scene
+  ospray::cpp::Geometry geom(rawGeom);
+
+  fprintf(stderr, "STEP 2: Setting filename param\n");
+  geom.setParam("filename", path);
+
+  if (!topObject.empty()) {
+    fprintf(stderr, "STEP 3: Setting objects param\n");
+    geom.setParam("objects", topObject);
+  }
+
+  fprintf(stderr, "STEP 4: Committing geometry\n");
+  geom.commit(); // 🔥 VERY LIKELY CRASH POINT
+  fprintf(stderr, "STEP 4 DONE\n");
+
+  // STEP 5: Bounds calculation
+  fprintf(stderr, "STEP 5: Default bounds\n");
+  boundsMin_ = vec3f(-1.f, -1.f, -1.f);
+  boundsMax_ = vec3f(1.f, 1.f, 1.f);
+
+  fprintf(stderr, "STEP 11: Creating GeometricModel\n");
   ospray::cpp::GeometricModel gmodel(geom);
   gmodel.commit();
 
+  fprintf(stderr, "STEP 12: Creating Group\n");
   ospray::cpp::Group group;
-  group.setParam("geometry", ospray::cpp::CopiedData(gmodel));
-  group.commit();
 
+  std::vector<ospray::cpp::GeometricModel> models = {gmodel};
+  group.setParam("geometry", ospray::cpp::CopiedData(models));
+  fprintf(stderr, "STEP 12: Creating Group - set param\n");
+  group.commit();
+  fprintf(stderr, "STEP 12: Creating Group - commit\n");
+
+
+  fprintf(stderr, "STEP 13: Creating Instance\n");
   ospray::cpp::Instance instance(group);
   instance.commit();
 
+  fprintf(stderr, "STEP 14: Creating World\n");
   world_ = ospray::cpp::World();
   world_.setParam("instance", ospray::cpp::CopiedData(instance));
 
+  fprintf(stderr, "STEP 15: Adding light\n");
   ospray::cpp::Light light("ambient");
   light.commit();
   world_.setParam("light", ospray::cpp::CopiedData(light));
+
+  fprintf(stderr, "STEP 16: Commit world\n");
   world_.commit();
 
+  fprintf(stderr, "STEP 16B: Reading world bounds\n");
+  const OSPBounds worldBounds = ospGetBounds(world_.handle());
+  if (std::isfinite(worldBounds.lower[0]) && std::isfinite(worldBounds.lower[1])
+      && std::isfinite(worldBounds.lower[2]) && std::isfinite(worldBounds.upper[0])
+      && std::isfinite(worldBounds.upper[1]) && std::isfinite(worldBounds.upper[2])) {
+    boundsMin_ =
+        vec3f(worldBounds.lower[0], worldBounds.lower[1], worldBounds.lower[2]);
+    boundsMax_ =
+        vec3f(worldBounds.upper[0], worldBounds.upper[1], worldBounds.upper[2]);
+    fprintf(stderr,
+        "STEP 16B DONE: min=(%f,%f,%f) max=(%f,%f,%f)\n",
+        boundsMin_.x,
+        boundsMin_.y,
+        boundsMin_.z,
+        boundsMax_.x,
+        boundsMax_.y,
+        boundsMax_.z);
+  } else {
+    fprintf(stderr, "STEP 16B: world bounds unavailable, using defaults\n");
+  }
+
+  fprintf(stderr, "STEP 17: Reset accumulation\n");
   resetAccumulation();
+
+  fprintf(stderr, "loadBrlcad: SUCCESS\n");
+
   return true;
 }
 
@@ -319,4 +389,14 @@ void OsprayBackend::setAoSamples(int samples)
 int& OsprayBackend::getAoSamples()
 {
   return aoSamples_;
+}
+
+const std::string &OsprayBackend::lastError() const
+{
+  return lastError_;
+}
+
+void OsprayBackend::setError(std::string message)
+{
+  lastError_ = std::move(message);
 }
