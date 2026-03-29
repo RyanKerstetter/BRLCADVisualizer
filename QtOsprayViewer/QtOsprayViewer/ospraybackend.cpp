@@ -34,7 +34,8 @@ std::string trimCopy(const std::string &value)
 
 void OsprayBackend::init()
 {
-  renderer_ = ospray::cpp::Renderer("ao");
+  renderer_ = ospray::cpp::Renderer("scivis");
+  currentRenderer_ = "scivis";
   renderer_.setParam("aoSamples", 0);
   renderer_.setParam("backgroundColor", 1.0f);
   renderer_.commit();
@@ -79,18 +80,18 @@ void OsprayBackend::resetAccumulation()
 
 const uint32_t *OsprayBackend::render()
 {
-  fprintf(stderr, "render: begin\n");
+  //fprintf(stderr, "render: begin\n");
   auto start = std::chrono::high_resolution_clock::now();
   fb_.renderFrame(renderer_, camera_, world_);
   auto end = std::chrono::high_resolution_clock::now();
-  fprintf(stderr, "render: frame complete\n");
+  //fprintf(stderr, "render: frame complete\n");
   lastFrameTimeMs_ = std::chrono::duration<float, std::milli>(end - start).count();
 
   void *mapped = fb_.map(OSP_FB_COLOR);
-  fprintf(stderr, "render: framebuffer mapped\n");
+  //fprintf(stderr, "render: framebuffer mapped\n");
   std::memcpy(pixels_.data(), mapped, pixels_.size() * sizeof(uint32_t));
   fb_.unmap(mapped);
-  fprintf(stderr, "render: end\n");
+  //fprintf(stderr, "render: end\n");
 
   return pixels_.data();
 }
@@ -186,10 +187,20 @@ void OsprayBackend::loadTestMesh()
   world_ = ospray::cpp::World();
   world_.setParam("instance", ospray::cpp::CopiedData(instance));
 
-  ospray::cpp::Light light("ambient");
-  light.commit();
+ std::vector<ospray::cpp::Light> lights;
 
-  world_.setParam("light", ospray::cpp::CopiedData(light));
+  ospray::cpp::Light ambient("ambient");
+  ambient.setParam("intensity", 0.25f);
+  ambient.commit();
+  lights.push_back(ambient);
+
+  ospray::cpp::Light distant("distant");
+  distant.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
+  distant.setParam("intensity", 3.0f);
+  distant.commit();
+  lights.push_back(distant);
+
+  world_.setParam("light", ospray::cpp::CopiedData(lights));
   world_.commit();
 
   resetAccumulation();
@@ -288,9 +299,21 @@ bool OsprayBackend::loadObj(const std::string &path)
   world_ = ospray::cpp::World();
   world_.setParam("instance", ospray::cpp::CopiedData(instance));
 
-  ospray::cpp::Light light("ambient");
-  light.commit();
-  world_.setParam("light", ospray::cpp::CopiedData(light));
+  std::vector<ospray::cpp::Light> lights;
+
+  ospray::cpp::Light ambient("ambient");
+  ambient.setParam("intensity", 0.25f);
+  ambient.commit();
+  lights.push_back(ambient);
+
+  ospray::cpp::Light distant("distant");
+  distant.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
+  distant.setParam("intensity", 3.0f);
+  distant.commit();
+  lights.push_back(distant);
+
+  world_.setParam("light", ospray::cpp::CopiedData(lights));
+
   world_.commit();
 
   resetAccumulation();
@@ -362,9 +385,19 @@ bool OsprayBackend::loadBrlcad(
   world_.setParam("instance", ospray::cpp::CopiedData(instance));
 
   fprintf(stderr, "STEP 15: Adding light\n");
-  ospray::cpp::Light light("ambient");
-  light.commit();
-  world_.setParam("light", ospray::cpp::CopiedData(light));
+  std::vector<ospray::cpp::Light> lights;
+
+  ospray::cpp::Light ambient("ambient");
+  ambient.setParam("intensity", 0.25f);
+  ambient.commit();
+  lights.push_back(ambient);
+
+  ospray::cpp::Light distant("distant");
+  distant.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
+  distant.setParam("intensity", 3.0f);
+  distant.commit();
+  lights.push_back(distant);
+  world_.setParam("light", ospray::cpp::CopiedData(lights));
 
   fprintf(stderr, "STEP 16: Commit world\n");
   world_.commit();
@@ -401,12 +434,18 @@ bool OsprayBackend::loadBrlcad(
 void OsprayBackend::setRenderer(const std::string &type)
 {
   renderer_ = ospray::cpp::Renderer(type);
+  currentRenderer_ = type;
 
-  // re-apply basic params
-  renderer_.setParam("aoSamples", aoSamples_); // if you have this
+  renderer_.setParam("backgroundColor", 1.0f);
+  renderer_.setParam("aoSamples", aoSamples_);
   renderer_.commit();
 
   resetAccumulation();
+}
+
+const std::string &OsprayBackend::currentRenderer() const
+{
+  return currentRenderer_;
 }
 
 void OsprayBackend::setAoSamples(int samples)

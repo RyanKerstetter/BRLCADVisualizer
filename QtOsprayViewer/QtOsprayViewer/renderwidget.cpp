@@ -31,6 +31,84 @@ RenderWidget::~RenderWidget()
   doneCurrent();
 }
 
+void RenderWidget::applyViewAction(
+    const InteractionController::Result &result, const QPoint &delta)
+{
+  using Action = InteractionController::Action;
+  using Axis = InteractionController::AxisConstraint;
+
+  if (result.action == Action::None)
+    return;
+
+  pitch_ = clampf(pitch_, -1.4f, 1.4f);
+
+  vec3f forward = normalizeVec(vec3f(std::cos(pitch_) * std::sin(yaw_),
+      std::sin(pitch_),
+      std::cos(pitch_) * std::cos(yaw_)));
+  vec3f right = normalizeVec(crossVec(forward, up_));
+  vec3f upCam = normalizeVec(crossVec(right, forward));
+
+  if (result.action == Action::Translate) {
+    float sx = float(delta.x()) * panSpeed_ * dist_;
+    float sy = float(delta.y()) * panSpeed_ * dist_;
+
+    vec3f move(0.f, 0.f, 0.f);
+
+    if (result.axis == Axis::Free) {
+      move = vec3f(-right.x * sx + upCam.x * sy,
+          -right.y * sx + upCam.y * sy,
+          -right.z * sx + upCam.z * sy);
+    } else {
+      float axisDelta = float(delta.x() - delta.y()) * panSpeed_ * dist_;
+
+      if (result.axis == Axis::X)
+        move = vec3f(axisDelta, 0.f, 0.f);
+      else if (result.axis == Axis::Y)
+        move = vec3f(0.f, axisDelta, 0.f);
+      else if (result.axis == Axis::Z)
+        move = vec3f(0.f, 0.f, axisDelta);
+    }
+
+    center_ = vec3f(center_.x + move.x, center_.y + move.y, center_.z + move.z);
+  }
+
+  else if (result.action == Action::Rotate) {
+    float dx = delta.x() * orbitSpeed_;
+    float dy = delta.y() * orbitSpeed_;
+
+    if (result.axis == Axis::Free) {
+      yaw_ += dx;
+      pitch_ += dy;
+    } else if (result.axis == Axis::X) {
+      pitch_ += dy;
+    } else if (result.axis == Axis::Y) {
+      yaw_ += dx;
+    } else if (result.axis == Axis::Z) {
+      yaw_ += dx;
+    }
+
+    pitch_ = clampf(pitch_, -1.4f, 1.4f);
+  }
+
+  else if (result.action == Action::Scale) {
+    float amount = float(delta.y()) * 0.01f;
+
+    float maxExtent = backend_.getBoundsMaxExtent();
+    if (maxExtent < 0.001f)
+      maxExtent = 1.0f;
+
+    float minDist = std::max(maxExtent * 1e-8f, 1e-8f);
+    float maxDist = std::max(maxExtent * 100.0f, 10.0f);
+
+    dist_ *= std::pow(1.05f, amount * 10.0f);
+    dist_ = clampf(dist_, minDist, maxDist);
+  }
+
+  backend_.resetAccumulation();
+  syncCameraToBackend();
+  renderOnce();
+}
+
 float RenderWidget::fitDistanceFromBounds(float maxExtent, float fovyDeg)
 {
   if (maxExtent < 0.001f)
@@ -202,7 +280,13 @@ void RenderWidget::paintGL()
   ImGui::Separator();
   ImGui::Text("Renderer");
 
-  static int rendererMode = 0;
+  int rendererMode = 0;
+  if (backend_.currentRenderer() == "scivis")
+    rendererMode = 1;
+  else if (backend_.currentRenderer() == "pathtracer")
+    rendererMode = 2;
+  else
+    rendererMode = 0;
 
   if (ImGui::RadioButton("ao", rendererMode == 0)) {
     rendererMode = 0;
@@ -251,10 +335,19 @@ void RenderWidget::paintGL()
   }
 
   ImGui::Separator();
-  if (mode == 0)
+  ImGui::Text("Controls");
+  if (mode == 0) {
     ImGui::Text("Orbit: LMB rotate | RMB pan | wheel zoom");
-  else
+    ImGui::Text("Shift + drag: Translate");
+    ImGui::Text("Ctrl + drag: Rotate");
+    ImGui::Text("Shift + Ctrl + drag: Scale");
+    ImGui::Text("Alt + Left: X axis");
+    ImGui::Text("Alt + Shift + Left: Y axis");
+    ImGui::Text("Alt + Right: Z axis");
+  }
+  else {
     ImGui::Text("Fly: WASD move | LMB look | Tab toggle");
+  }
 
   ImGui::End();
 
@@ -381,7 +474,15 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
   const QPoint d = e->pos() - lastMouse_;
   lastMouse_ = e->pos();
 
+  auto result = InteractionController::classify(e->buttons(), e->modifiers());
+
   if (inputMode_ == InputMode::Orbit) {
+    if (result.action != InteractionController::Action::None) {
+      applyViewAction(result, d);
+      return;
+    }
+
+    // Fallback to original behavior when no modifiers are pressed
     if (e->buttons() & Qt::LeftButton) {
       yaw_ += d.x() * orbitSpeed_;
       pitch_ += d.y() * orbitSpeed_;
@@ -389,6 +490,7 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
       backend_.resetAccumulation();
       syncCameraToBackend();
       renderOnce();
+      return;
     }
 
     if (e->buttons() & Qt::RightButton) {
@@ -410,7 +512,9 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
       backend_.resetAccumulation();
       syncCameraToBackend();
       renderOnce();
+      return;
     }
+
   } else {
     if (e->buttons() & Qt::LeftButton) {
       flyYaw_ += d.x() * orbitSpeed_;
@@ -419,6 +523,7 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
       backend_.resetAccumulation();
       syncCameraToBackend();
       renderOnce();
+      return;
     }
   }
 }
@@ -555,3 +660,4 @@ void RenderWidget::focusOutEvent(QFocusEvent *e)
   imguiHasFocus_ = false;
   update();
 }
+

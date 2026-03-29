@@ -46,6 +46,8 @@ qt_add_executable(QtOsprayViewer
     renderwidget.h
     ospraybackend.cpp
     ospraybackend.h
+    interactioncontroller.cpp
+    interactioncontroller.h
 )
 
 target_sources(QtOsprayViewer PRIVATE

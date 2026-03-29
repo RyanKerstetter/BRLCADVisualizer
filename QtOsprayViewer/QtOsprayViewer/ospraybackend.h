@@ -14,7 +14,7 @@ class OsprayBackend
 
   void init();
   void resize(int w, int h);
-
+  const std::string &currentRenderer() const;
   void setCamera(const rkcommon::math::vec3f &eye,
       const rkcommon::math::vec3f &center,
       const rkcommon::math::vec3f &up,
@@ -72,5 +72,6 @@ class OsprayBackend
   std::vector<uint32_t> pixels_;
   std::string lastError_;
   float lastFrameTimeMs_ = 0.0f;
+  std::string currentRenderer_ = "scivis";
   
 };
