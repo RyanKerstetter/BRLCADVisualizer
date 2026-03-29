@@ -8,35 +8,50 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if(WIN32)
-    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.10.2/msvc2022_64")
-else()
-    list(APPEND CMAKE_PREFIX_PATH "/home/adeeb/Qt/6.10.2/gcc_64")
-endif()
-
+# Qt: add its prefix to CMAKE_PREFIX_PATH, e.g.:
+#   cmake -DCMAKE_PREFIX_PATH=C:/Qt/6.11.0/msvc2022_64 ...
+# or set Qt6_DIR directly.
 find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets)
 find_package(OpenGL REQUIRED)
 
-if(WIN32)
-    set(OSPRAY_PREFIX "C:/ospray/build/install/ospray" CACHE PATH "OSPRay prefix")
-    set(RKCOMMON_PREFIX "C:/ospray/build/install/rkcommon" CACHE PATH "rkcommon prefix")
-else()
-    set(OSPRAY_PREFIX "/home/adeeb/workspace/csce482/build/install/ospray" CACHE PATH "OSPRay prefix")
-    set(RKCOMMON_PREFIX "/home/adeeb/workspace/csce482/build/install/rkcommon" CACHE PATH "rkcommon prefix")
-endif()
-list(APPEND CMAKE_PREFIX_PATH "${OSPRAY_PREFIX}" "${RKCOMMON_PREFIX}")
+# ---- OSPRay / rkcommon / Embree / OpenVKL ----
+# Pass via -D flags at configure time, e.g.:
+#   -DOSPRAY_PREFIX=... -DRKCOMMON_PREFIX=... -DEMBREE_PREFIX=... -DOPENVKL_PREFIX=...
+set(OSPRAY_PREFIX   "" CACHE PATH "OSPRay prefix")
+set(RKCOMMON_PREFIX "" CACHE PATH "rkcommon prefix")
 
+foreach(_pkg OSPRAY_PREFIX RKCOMMON_PREFIX)
+    if(NOT ${_pkg})
+        message(FATAL_ERROR "${_pkg} is not set. Pass it with -D${_pkg}=<path>")
+    endif()
+endforeach()
+
+list(APPEND CMAKE_PREFIX_PATH "${OSPRAY_PREFIX}" "${RKCOMMON_PREFIX}")
 find_package(ospray REQUIRED CONFIG)
 
-# BRL-CAD
 if(WIN32)
-    set(BRLCAD_PREFIX "C:/brlcad-build" CACHE PATH "BRL-CAD prefix")
-else()
-    set(BRLCAD_PREFIX "/usr/brlcad/rel-7.42.0" CACHE PATH "BRL-CAD prefix")
+    set(EMBREE_PREFIX  "" CACHE PATH "Embree prefix")
+    set(OPENVKL_PREFIX "" CACHE PATH "OpenVKL prefix")
+    set(TBB_ROOT       "" CACHE PATH "TBB root")
+
+    foreach(_pkg EMBREE_PREFIX OPENVKL_PREFIX TBB_ROOT)
+        if(NOT ${_pkg})
+            message(FATAL_ERROR "${_pkg} is not set. Pass it with -D${_pkg}=<path>")
+        endif()
+    endforeach()
+
+    find_package(TBB REQUIRED COMPONENTS tbb CONFIG
+        HINTS "${TBB_ROOT}/lib/cmake/TBB" "${TBB_ROOT}/lib/cmake")
+endif()
+
+# ---- BRL-CAD ----
+set(BRLCAD_PREFIX "" CACHE PATH "BRL-CAD prefix")
+if(NOT BRLCAD_PREFIX)
+    message(FATAL_ERROR "BRLCAD_PREFIX is not set. Pass it with -DBRLCAD_PREFIX=<path>")
 endif()
 find_path(BRLCAD_INCLUDE_DIR brlcad/rt/db4.h PATHS "${BRLCAD_PREFIX}/include" REQUIRED)
-find_library(BRLCAD_RT_LIBRARY  NAMES rt  PATHS "${BRLCAD_PREFIX}/lib" NO_DEFAULT_PATH REQUIRED)
-find_library(BRLCAD_BU_LIBRARY  NAMES bu  PATHS "${BRLCAD_PREFIX}/lib" NO_DEFAULT_PATH REQUIRED)
+find_library(BRLCAD_RT_LIBRARY NAMES rt librt PATHS "${BRLCAD_PREFIX}/lib" NO_DEFAULT_PATH REQUIRED)
+find_library(BRLCAD_BU_LIBRARY NAMES bu libbu PATHS "${BRLCAD_PREFIX}/lib" NO_DEFAULT_PATH REQUIRED)
 
 qt_add_executable(QtOsprayViewer
     main.cpp
@@ -65,6 +80,7 @@ target_include_directories(QtOsprayViewer PRIVATE
     "${BRLCAD_INCLUDE_DIR}"
     "${BRLCAD_INCLUDE_DIR}/brlcad"
     "${BRLCAD_INCLUDE_DIR}/OpenNURBS"
+    $<$<BOOL:${WIN32}>:${TBB_ROOT}/include>
 )
 
 target_link_libraries(QtOsprayViewer PRIVATE
@@ -74,62 +90,65 @@ target_link_libraries(QtOsprayViewer PRIVATE
     OpenGL::GL
     ${BRLCAD_RT_LIBRARY}
     ${BRLCAD_BU_LIBRARY}
+    $<$<BOOL:${WIN32}>:TBB::tbb>
 )
 
 if(WIN32)
     add_custom_command(TARGET QtOsprayViewer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "C:/ospray/build/install/ospray/bin"
+            "${OSPRAY_PREFIX}/bin"
             "$<TARGET_FILE_DIR:QtOsprayViewer>"
-    )
-    add_custom_command(TARGET QtOsprayViewer POST_BUILD
-        COMMAND "C:/Qt/6.10.2/msvc2022_64/bin/windeployqt.exe"
-                "$<TARGET_FILE:QtOsprayViewer>"
-        COMMENT "Running windeployqt..."
-    )
-endif()
-
-
-if(WIN32)
-    add_custom_command(TARGET QtOsprayViewer POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "C:/ospray/build/install/ospray/bin"
-            "$<TARGET_FILE_DIR:QtOsprayViewer>"
-        COMMENT "Copying OSPRay runtime DLLs..."
-    )
+        COMMENT "Copying OSPRay runtime DLLs...")
 
     add_custom_command(TARGET QtOsprayViewer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "C:/ospray/build/install/rkcommon/bin"
+            "${RKCOMMON_PREFIX}/bin"
             "$<TARGET_FILE_DIR:QtOsprayViewer>"
-        COMMENT "Copying rkcommon runtime DLLs..."
-    )
+        COMMENT "Copying rkcommon runtime DLLs...")
 
     add_custom_command(TARGET QtOsprayViewer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "C:/ospray/build/install/embree/bin"
+            "${EMBREE_PREFIX}/bin"
             "$<TARGET_FILE_DIR:QtOsprayViewer>"
-        COMMENT "Copying Embree runtime DLLs..."
-    )
+        COMMENT "Copying Embree runtime DLLs...")
 
     add_custom_command(TARGET QtOsprayViewer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "C:/openvkl-install-x64/bin"
+            "${OPENVKL_PREFIX}/bin"
             "$<TARGET_FILE_DIR:QtOsprayViewer>"
-        COMMENT "Copying Open VKL runtime DLLs..."
-    )
-
+        COMMENT "Copying OpenVKL runtime DLLs...")
 
     add_custom_command(TARGET QtOsprayViewer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "C:/brlcad-build/bin"
+            "${BRLCAD_PREFIX}/bin"
             "$<TARGET_FILE_DIR:QtOsprayViewer>"
-        COMMENT "Copying BRL-CAD runtime DLLs..."
-    )
+        COMMENT "Copying BRL-CAD runtime DLLs...")
 
+    # Force the correct rkcommon.dll and embree4.dll — OpenVKL ships older
+    # mismatched versions that get copied last and would override them.
     add_custom_command(TARGET QtOsprayViewer POST_BUILD
-        COMMAND "C:/Qt/6.10.2/msvc2022_64/bin/windeployqt.exe"
-                "$<TARGET_FILE:QtOsprayViewer>"
-        COMMENT "Running windeployqt..."
-    )
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${RKCOMMON_PREFIX}/bin/rkcommon.dll"
+            "$<TARGET_FILE_DIR:QtOsprayViewer>/rkcommon.dll"
+        COMMENT "Restoring correct rkcommon.dll...")
+    add_custom_command(TARGET QtOsprayViewer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${EMBREE_PREFIX}/bin/embree4.dll"
+            "$<TARGET_FILE_DIR:QtOsprayViewer>/embree4.dll"
+        COMMENT "Restoring correct embree4.dll...")
+
+    # Remove any CRT DLLs copied from third-party packages — always use the
+    # system-installed versions to avoid version mismatches with Qt / MSVC.
+    add_custom_command(TARGET QtOsprayViewer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:QtOsprayViewer>/vcruntime140.dll"
+            "$<TARGET_FILE_DIR:QtOsprayViewer>/vcruntime140_1.dll"
+            "$<TARGET_FILE_DIR:QtOsprayViewer>/msvcp140.dll"
+        COMMENT "Removing bundled CRT DLLs (use system versions)...")
+
+    # Find and run windeployqt from the Qt installation used at build time.
+    find_program(WINDEPLOYQT windeployqt HINTS "${Qt6_DIR}/../../../bin" REQUIRED)
+    add_custom_command(TARGET QtOsprayViewer POST_BUILD
+        COMMAND "${WINDEPLOYQT}" "$<TARGET_FILE:QtOsprayViewer>"
+        COMMENT "Running windeployqt...")
 endif()

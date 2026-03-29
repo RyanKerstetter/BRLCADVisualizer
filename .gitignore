@@ -38,3 +38,9 @@ compile_commands.json
 .cache/
 .vs/
 **/.vs/
+bw/
+brl_cad_standalone/build*/
+scripts/superbuild/build/
+QtOsprayViewer/build*/
+**/.qtcreator/
+imgui.ini

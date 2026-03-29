@@ -5,10 +5,18 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ---- Installed OSPRay / rkcommon / embree ----
-set(OSPRAY_PREFIX   "/home/adeeb/workspace/csce482/build/install/ospray"   CACHE PATH "OSPRay install prefix")
-set(RKCOMMON_PREFIX "/home/adeeb/workspace/csce482/build/install/rkcommon" CACHE PATH "rkcommon install prefix")
-set(EMBREE_PREFIX   "/home/adeeb/workspace/csce482/build/install/embree"   CACHE PATH "Embree install prefix")
-set(OPENVKL_PREFIX  "/home/adeeb/workspace/csce482/build/install/openvkl"  CACHE PATH "OpenVKL install prefix")
+# Pass these via -D flags or CMAKE_PREFIX_PATH at configure time, e.g.:
+#   cmake -DOSPRAY_PREFIX=... -DRKCOMMON_PREFIX=... -DEMBREE_PREFIX=... -DOPENVKL_PREFIX=...
+set(OSPRAY_PREFIX   "" CACHE PATH "OSPRay install prefix")
+set(RKCOMMON_PREFIX "" CACHE PATH "rkcommon install prefix")
+set(EMBREE_PREFIX   "" CACHE PATH "Embree install prefix")
+set(OPENVKL_PREFIX  "" CACHE PATH "OpenVKL install prefix")
+
+foreach(_pkg OSPRAY_PREFIX RKCOMMON_PREFIX EMBREE_PREFIX OPENVKL_PREFIX)
+    if(NOT ${_pkg})
+        message(FATAL_ERROR "${_pkg} is not set. Pass it with -D${_pkg}=<path>")
+    endif()
+endforeach()
 
 list(APPEND CMAKE_PREFIX_PATH "${OSPRAY_PREFIX}" "${RKCOMMON_PREFIX}" "${EMBREE_PREFIX}" "${OPENVKL_PREFIX}")
 
@@ -46,7 +54,11 @@ add_definitions_ispc(
 )
 
 # ---- BRL-CAD ----
-set(BRLCAD_PREFIX "/usr/brlcad/rel-7.42.0" CACHE PATH "BRL-CAD install prefix")
+# Pass via -DBRLCAD_PREFIX=<path> at configure time.
+set(BRLCAD_PREFIX "" CACHE PATH "BRL-CAD install prefix")
+if(NOT BRLCAD_PREFIX)
+    message(FATAL_ERROR "BRLCAD_PREFIX is not set. Pass it with -DBRLCAD_PREFIX=<path>")
+endif()
 find_path(BRLCAD_INCLUDE_DIR brlcad/common.h PATHS "${BRLCAD_PREFIX}/include" REQUIRED)
 find_library(BRLCAD_LIBBU bu  PATHS "${BRLCAD_PREFIX}/lib" REQUIRED)
 find_library(BRLCAD_LIBBN bn  PATHS "${BRLCAD_PREFIX}/lib" REQUIRED)
@@ -101,4 +113,5 @@ target_link_libraries(ospray_module_brl_cad PRIVATE
 # Install next to the other OSPRay modules so ospLoadModule finds it
 install(TARGETS ospray_module_brl_cad
     LIBRARY DESTINATION "${OSPRAY_PREFIX}/lib"
+    RUNTIME DESTINATION "${OSPRAY_PREFIX}/lib"
 )
