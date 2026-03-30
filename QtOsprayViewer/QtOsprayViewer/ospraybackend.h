@@ -25,6 +25,7 @@ class OsprayBackend
 
   bool loadObj(const std::string &path);
   bool loadBrlcad(const std::string &path, const std::string &topObject = "");
+  std::vector<std::string> listBrlcadObjects(const std::string &path) const;
   void loadTestMesh();
 
   rkcommon::math::vec3f getBoundsCenter() const;
@@ -38,6 +39,7 @@ class OsprayBackend
   void setAoSamples(int samples);
   
   const std::string &lastError() const;
+  uint64_t accumulatedFrames() const;
 
   int width() const
   {
@@ -73,5 +75,7 @@ class OsprayBackend
   std::string lastError_;
   float lastFrameTimeMs_ = 0.0f;
   std::string currentRenderer_ = "scivis";
+  uint64_t accumulatedFrames_ = 0;
+  static constexpr int kMaxSafeAoSamples = 64;
   
 };

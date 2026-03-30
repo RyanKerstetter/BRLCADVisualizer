@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <exception>
+#include <stdexcept>
 
 #include <ospray/ospray.h>
 #define TINYOBJLOADER_IMPLEMENTATION
@@ -12,6 +13,7 @@
 // BRL-CAD headers (C API, needs extern "C" guard)
 extern "C" {
 #include <brlcad/raytrace.h>
+#include <brlcad/rt/search.h>
 }
 
 using rkcommon::math::vec3f;
@@ -34,18 +36,23 @@ std::string trimCopy(const std::string &value)
 
 void OsprayBackend::init()
 {
-  renderer_ = ospray::cpp::Renderer("scivis");
-  currentRenderer_ = "scivis";
-  renderer_.setParam("aoSamples", 0);
-  renderer_.setParam("backgroundColor", 1.0f);
-  renderer_.commit();
+  try {
+    renderer_ = ospray::cpp::Renderer("scivis");
+    currentRenderer_ = "scivis";
+    renderer_.setParam("aoSamples", 0);
+    renderer_.setParam("backgroundColor", 1.0f);
+    renderer_.commit();
 
+    camera_ = ospray::cpp::Camera("perspective");
+    camera_.setParam("fovy", 60.f);
+    camera_.commit();
 
-  camera_ = ospray::cpp::Camera("perspective");
-  camera_.setParam("fovy", 60.f);
-  camera_.commit();
-
-  loadTestMesh();
+    loadTestMesh();
+  } catch (const std::exception &e) {
+    setError(e.what());
+  } catch (...) {
+    setError("Unknown failure while initializing OSPRay backend.");
+  }
 }
 
 void OsprayBackend::resize(int w, int h)
@@ -58,7 +65,8 @@ void OsprayBackend::resize(int w, int h)
 
   fb_ = ospray::cpp::FrameBuffer(
       fbW_, fbH_, OSP_FB_SRGBA, OSP_FB_COLOR | OSP_FB_ACCUM);
-  fb_.clear();
+  fb_.resetAccumulation();
+  accumulatedFrames_ = 0;
 
   pixels_.assign(size_t(fbW_) * size_t(fbH_), 0u);
 }
@@ -74,26 +82,39 @@ void OsprayBackend::setCamera(const vec3f &eye, const vec3f &center, const vec3f
 
 void OsprayBackend::resetAccumulation()
 {
-  if (fb_.handle())
-    fb_.clear();
+  if (fb_.handle()) {
+    fb_.resetAccumulation();
+    accumulatedFrames_ = 0;
+  }
 }
 
 const uint32_t *OsprayBackend::render()
 {
-  //fprintf(stderr, "render: begin\n");
-  auto start = std::chrono::high_resolution_clock::now();
-  fb_.renderFrame(renderer_, camera_, world_);
-  auto end = std::chrono::high_resolution_clock::now();
-  //fprintf(stderr, "render: frame complete\n");
-  lastFrameTimeMs_ = std::chrono::duration<float, std::milli>(end - start).count();
+  try {
+    if (!fb_.handle() || !renderer_.handle() || !camera_.handle()
+        || !world_.handle() || pixels_.empty()) {
+      return nullptr;
+    }
 
-  void *mapped = fb_.map(OSP_FB_COLOR);
-  //fprintf(stderr, "render: framebuffer mapped\n");
-  std::memcpy(pixels_.data(), mapped, pixels_.size() * sizeof(uint32_t));
-  fb_.unmap(mapped);
-  //fprintf(stderr, "render: end\n");
+    auto start = std::chrono::high_resolution_clock::now();
+    fb_.renderFrame(renderer_, camera_, world_);
+    auto end = std::chrono::high_resolution_clock::now();
+    lastFrameTimeMs_ =
+        std::chrono::duration<float, std::milli>(end - start).count();
+    ++accumulatedFrames_;
 
-  return pixels_.data();
+    void *mapped = fb_.map(OSP_FB_COLOR);
+    std::memcpy(pixels_.data(), mapped, pixels_.size() * sizeof(uint32_t));
+    fb_.unmap(mapped);
+
+    return pixels_.data();
+  } catch (const std::exception &e) {
+    setError(e.what());
+    return nullptr;
+  } catch (...) {
+    setError("Unknown failure while rendering.");
+    return nullptr;
+  }
 }
 
 float OsprayBackend::lastFrameTimeMs() const
@@ -209,115 +230,122 @@ void OsprayBackend::loadTestMesh()
 bool OsprayBackend::loadObj(const std::string &path)
 {
   lastError_.clear();
+  try {
+    tinyobj::ObjReader reader;
+    tinyobj::ObjReaderConfig config;
+    config.triangulate = true;
 
-  tinyobj::ObjReader reader;
-  tinyobj::ObjReaderConfig config;
-  config.triangulate = true;
-
-  if (!reader.ParseFromFile(path, config)) {
-    setError("Could not parse OBJ file: " + path);
-    return false;
-  }
-
-  if (!reader.Error().empty()) {
-    setError(reader.Error());
-    return false;
-  }
-
-  const auto &attrib = reader.GetAttrib();
-  const auto &shapes = reader.GetShapes();
-
-  std::vector<vec3f> vertices;
-  std::vector<vec4f> colors;
-  std::vector<vec3ui> indices;
-
-  for (size_t v = 0; v < attrib.vertices.size() / 3; ++v) {
-    vertices.emplace_back(attrib.vertices[3 * v + 0],
-        attrib.vertices[3 * v + 1],
-        attrib.vertices[3 * v + 2]);
-    colors.emplace_back(0.8f, 0.8f, 0.8f, 1.0f);
-  }
-
-  for (const auto &shape : shapes) {
-    size_t indexOffset = 0;
-    for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); ++f) {
-      int fv = shape.mesh.num_face_vertices[f];
-      if (fv != 3) {
-        indexOffset += fv;
-        continue;
-      }
-
-      const auto &i0 = shape.mesh.indices[indexOffset + 0];
-      const auto &i1 = shape.mesh.indices[indexOffset + 1];
-      const auto &i2 = shape.mesh.indices[indexOffset + 2];
-
-      if (i0.vertex_index < 0 || i1.vertex_index < 0 || i2.vertex_index < 0) {
-        indexOffset += fv;
-        continue;
-      }
-
-      indices.emplace_back(static_cast<unsigned>(i0.vertex_index),
-          static_cast<unsigned>(i1.vertex_index),
-          static_cast<unsigned>(i2.vertex_index));
-
-      indexOffset += fv;
+    if (!reader.ParseFromFile(path, config)) {
+      setError("Could not parse OBJ file: " + path);
+      return false;
     }
-  }
 
-  if (vertices.empty() || indices.empty()) {
-    setError("OBJ file did not contain any triangulated mesh data.");
+    if (!reader.Error().empty()) {
+      setError(reader.Error());
+      return false;
+    }
+
+    const auto &attrib = reader.GetAttrib();
+    const auto &shapes = reader.GetShapes();
+
+    std::vector<vec3f> vertices;
+    std::vector<vec4f> colors;
+    std::vector<vec3ui> indices;
+
+    for (size_t v = 0; v < attrib.vertices.size() / 3; ++v) {
+      vertices.emplace_back(attrib.vertices[3 * v + 0],
+          attrib.vertices[3 * v + 1],
+          attrib.vertices[3 * v + 2]);
+      colors.emplace_back(0.8f, 0.8f, 0.8f, 1.0f);
+    }
+
+    for (const auto &shape : shapes) {
+      size_t indexOffset = 0;
+      for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); ++f) {
+        int fv = shape.mesh.num_face_vertices[f];
+        if (fv != 3) {
+          indexOffset += fv;
+          continue;
+        }
+
+        const auto &i0 = shape.mesh.indices[indexOffset + 0];
+        const auto &i1 = shape.mesh.indices[indexOffset + 1];
+        const auto &i2 = shape.mesh.indices[indexOffset + 2];
+
+        if (i0.vertex_index < 0 || i1.vertex_index < 0
+            || i2.vertex_index < 0) {
+          indexOffset += fv;
+          continue;
+        }
+
+        indices.emplace_back(static_cast<unsigned>(i0.vertex_index),
+            static_cast<unsigned>(i1.vertex_index),
+            static_cast<unsigned>(i2.vertex_index));
+
+        indexOffset += fv;
+      }
+    }
+
+    if (vertices.empty() || indices.empty()) {
+      setError("OBJ file did not contain any triangulated mesh data.");
+      return false;
+    }
+
+    boundsMin_ = vertices[0];
+    boundsMax_ = vertices[0];
+    for (const auto &v : vertices) {
+      boundsMin_.x = std::min(boundsMin_.x, v.x);
+      boundsMin_.y = std::min(boundsMin_.y, v.y);
+      boundsMin_.z = std::min(boundsMin_.z, v.z);
+      boundsMax_.x = std::max(boundsMax_.x, v.x);
+      boundsMax_.y = std::max(boundsMax_.y, v.y);
+      boundsMax_.z = std::max(boundsMax_.z, v.z);
+    }
+
+    ospray::cpp::Geometry mesh("mesh");
+    mesh.setParam("vertex.position", ospray::cpp::CopiedData(vertices));
+    mesh.setParam("vertex.color", ospray::cpp::CopiedData(colors));
+    mesh.setParam("index", ospray::cpp::CopiedData(indices));
+    mesh.commit();
+
+    ospray::cpp::GeometricModel model(mesh);
+    model.commit();
+
+    ospray::cpp::Group group;
+    group.setParam("geometry", ospray::cpp::CopiedData(model));
+    group.commit();
+
+    ospray::cpp::Instance instance(group);
+    instance.commit();
+
+    world_ = ospray::cpp::World();
+    world_.setParam("instance", ospray::cpp::CopiedData(instance));
+
+    std::vector<ospray::cpp::Light> lights;
+
+    ospray::cpp::Light ambient("ambient");
+    ambient.setParam("intensity", 0.25f);
+    ambient.commit();
+    lights.push_back(ambient);
+
+    ospray::cpp::Light distant("distant");
+    distant.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
+    distant.setParam("intensity", 3.0f);
+    distant.commit();
+    lights.push_back(distant);
+
+    world_.setParam("light", ospray::cpp::CopiedData(lights));
+    world_.commit();
+
+    resetAccumulation();
+    return true;
+  } catch (const std::exception &e) {
+    setError(e.what());
+    return false;
+  } catch (...) {
+    setError("Unknown failure while loading OBJ.");
     return false;
   }
-
-  boundsMin_ = vertices[0];
-  boundsMax_ = vertices[0];
-  for (const auto &v : vertices) {
-    boundsMin_.x = std::min(boundsMin_.x, v.x);
-    boundsMin_.y = std::min(boundsMin_.y, v.y);
-    boundsMin_.z = std::min(boundsMin_.z, v.z);
-    boundsMax_.x = std::max(boundsMax_.x, v.x);
-    boundsMax_.y = std::max(boundsMax_.y, v.y);
-    boundsMax_.z = std::max(boundsMax_.z, v.z);
-  }
-
-  ospray::cpp::Geometry mesh("mesh");
-  mesh.setParam("vertex.position", ospray::cpp::CopiedData(vertices));
-  mesh.setParam("vertex.color", ospray::cpp::CopiedData(colors));
-  mesh.setParam("index", ospray::cpp::CopiedData(indices));
-  mesh.commit();
-
-  ospray::cpp::GeometricModel model(mesh);
-  model.commit();
-
-  ospray::cpp::Group group;
-  group.setParam("geometry", ospray::cpp::CopiedData(model));
-  group.commit();
-
-  ospray::cpp::Instance instance(group);
-  instance.commit();
-
-  world_ = ospray::cpp::World();
-  world_.setParam("instance", ospray::cpp::CopiedData(instance));
-
-  std::vector<ospray::cpp::Light> lights;
-
-  ospray::cpp::Light ambient("ambient");
-  ambient.setParam("intensity", 0.25f);
-  ambient.commit();
-  lights.push_back(ambient);
-
-  ospray::cpp::Light distant("distant");
-  distant.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
-  distant.setParam("intensity", 3.0f);
-  distant.commit();
-  lights.push_back(distant);
-
-  world_.setParam("light", ospray::cpp::CopiedData(lights));
-
-  world_.commit();
-
-  resetAccumulation();
-  return true;
 }
 
 
@@ -325,6 +353,7 @@ bool OsprayBackend::loadBrlcad(
     const std::string &path, const std::string &topObject)
 {
   lastError_.clear();
+  try {
   fprintf(stderr, "loadBrlcad: START\n");
   fprintf(stderr, "loadBrlcad: path = %s\n", path.c_str());
   fprintf(stderr, "loadBrlcad: object = %s\n", topObject.c_str());
@@ -429,18 +458,31 @@ bool OsprayBackend::loadBrlcad(
   fprintf(stderr, "loadBrlcad: SUCCESS\n");
 
   return true;
+  } catch (const std::exception &e) {
+    setError(e.what());
+    return false;
+  } catch (...) {
+    setError("Unknown failure while loading BRL-CAD geometry.");
+    return false;
+  }
 }
 
 void OsprayBackend::setRenderer(const std::string &type)
 {
-  renderer_ = ospray::cpp::Renderer(type);
-  currentRenderer_ = type;
+  try {
+    renderer_ = ospray::cpp::Renderer(type);
+    currentRenderer_ = type;
 
-  renderer_.setParam("backgroundColor", 1.0f);
-  renderer_.setParam("aoSamples", aoSamples_);
-  renderer_.commit();
+    renderer_.setParam("backgroundColor", 1.0f);
+    renderer_.setParam("aoSamples", aoSamples_);
+    renderer_.commit();
 
-  resetAccumulation();
+    resetAccumulation();
+  } catch (const std::exception &e) {
+    setError(e.what());
+  } catch (...) {
+    setError("Unknown failure while changing renderer.");
+  }
 }
 
 const std::string &OsprayBackend::currentRenderer() const
@@ -450,12 +492,18 @@ const std::string &OsprayBackend::currentRenderer() const
 
 void OsprayBackend::setAoSamples(int samples)
 {
-  aoSamples_ = samples;
+  aoSamples_ = std::clamp(samples, 0, kMaxSafeAoSamples);
 
-  renderer_.setParam("aoSamples", aoSamples_);
-  renderer_.commit();
+  try {
+    renderer_.setParam("aoSamples", aoSamples_);
+    renderer_.commit();
 
-  resetAccumulation();
+    resetAccumulation();
+  } catch (const std::exception &e) {
+    setError(e.what());
+  } catch (...) {
+    setError("Unknown failure while updating AO samples.");
+  }
 }
 
 int& OsprayBackend::getAoSamples()
@@ -471,4 +519,39 @@ const std::string &OsprayBackend::lastError() const
 void OsprayBackend::setError(std::string message)
 {
   lastError_ = std::move(message);
+}
+
+uint64_t OsprayBackend::accumulatedFrames() const
+{
+  return accumulatedFrames_;
+}
+
+std::vector<std::string> OsprayBackend::listBrlcadObjects(
+    const std::string &path) const
+{
+  std::vector<std::string> names;
+  if (path.empty())
+    return names;
+
+  rt_i *tmpRtip = rt_dirbuild(path.c_str(), nullptr, 0);
+  if (!tmpRtip || !tmpRtip->rti_dbip)
+    return names;
+
+  directory **dpv = nullptr;
+  const size_t count =
+      db_ls(tmpRtip->rti_dbip, DB_LS_TOPS | DB_LS_COMB | DB_LS_REGION, nullptr, &dpv);
+
+  names.emplace_back("all");
+  for (size_t i = 0; i < count; ++i) {
+    if (dpv[i] && dpv[i]->d_namep && *dpv[i]->d_namep)
+      names.emplace_back(dpv[i]->d_namep);
+  }
+
+  std::sort(names.begin(), names.end());
+  names.erase(std::unique(names.begin(), names.end()), names.end());
+
+  if (dpv)
+    bu_free(dpv, "db_ls object list");
+  rt_free_rti(tmpRtip);
+  return names;
 }

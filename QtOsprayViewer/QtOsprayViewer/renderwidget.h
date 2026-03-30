@@ -2,11 +2,13 @@
 
 #include <QImage>
 #include <QKeyEvent>
+#include <QStringList>
 #include <QMouseEvent>
 #include <QOpenGLFunctions>
 #include <QOpenGLWidget>
 #include <QPoint>
 #include <QString>
+#include <QTimer>
 #include <QWheelEvent>
 
 #include <ospray/ospray_cpp/ext/rkcommon.h>
@@ -31,15 +33,29 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
     Object
   };
 
+  enum class UpAxis
+  {
+    Y,
+    Z
+  };
+
   ManipulationTarget manipulationTarget_ = ManipulationTarget::View;
   explicit RenderWidget(QWidget *parent = nullptr);
   ~RenderWidget() override;
 
   bool loadModel(const QString &path);
   bool loadBrlcadModel(const QString &path, const QString &topObject = QString());
+  QStringList listBrlcadObjects(const QString &path) const;
+  bool reloadBrlcadObject(const QString &topObject);
   QString lastError() const;
   void resetView();
   void setInputMode(InputMode mode);
+  void setUpAxis(UpAxis axis);
+  UpAxis upAxis() const;
+  QString currentBrlcadPath() const;
+  QString currentBrlcadObject() const;
+  QStringList currentBrlcadObjects() const;
+  bool hasBrlcadScene() const;
 
   void setObjectTransform(const rkcommon::math::affine3f &xfm);
   rkcommon::math::affine3f objectTransform() const;
@@ -64,9 +80,13 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   static float fitDistanceFromBounds(float maxExtent, float fovyDeg);
   void syncFlyFromOrbit();
   void syncOrbitFromFly();
+  rkcommon::math::vec3f worldUp() const;
+  rkcommon::math::vec3f worldForwardReference() const;
+  rkcommon::math::vec3f forwardFromAngles(float yaw, float pitch) const;
   float flyMoveFactor_ = 0.005f;
   void syncCameraToBackend();
   void renderOnce();
+  void advanceRender();
 
   static float clampf(float v, float lo, float hi);
   static rkcommon::math::vec3f normalizeVec(const rkcommon::math::vec3f &v);
@@ -79,12 +99,14 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   OsprayBackend backend_;
   QImage image_;
   QPoint lastMouse_;
+  QTimer *renderTimer_ = nullptr;
+  bool backendReady_ = false;
 
   InputMode inputMode_ = InputMode::Orbit;
+  UpAxis upAxis_ = UpAxis::Z;
 
   // Orbit camera
   rkcommon::math::vec3f center_{0.f, 0.f, 1.5f};
-  rkcommon::math::vec3f up_{0.f, 1.f, 0.f};
 
   float yaw_ = 0.3f;
   float pitch_ = 0.2f;
@@ -104,4 +126,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   float imguiMouseWheel_ = 0.0f;
   QPointF imguiMousePos_{0.0, 0.0};
   bool imguiHasFocus_ = false;
+  QString currentBrlcadPath_;
+  QString currentBrlcadObject_;
+  QStringList currentBrlcadObjects_;
 };

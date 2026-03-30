@@ -40,6 +40,10 @@ compile_commands.json
 **/.vs/
 bw/
 brl_cad_standalone/build*/
+QtOsprayViewer/QtOsprayViewer/build*/
+QtOsprayViewer/QtOsprayViewer/**/imgui.ini
+modules/pluggableGeometryExample/brl_cad_module/out/
+bv/
 scripts/superbuild/build/
 QtOsprayViewer/build*/
 **/.qtcreator/

@@ -15,9 +15,9 @@ RenderWidget::RenderWidget(QWidget *parent) : QOpenGLWidget(parent)
 {
   setFocusPolicy(Qt::StrongFocus);
   
-  auto* timer = new QTimer(this);
-  connect(timer, &QTimer::timeout, this, QOverload<>::of(&RenderWidget::update));
-  timer->start(16); // ~60 FPS
+  renderTimer_ = new QTimer(this);
+  connect(renderTimer_, &QTimer::timeout, this, &RenderWidget::advanceRender);
+  renderTimer_->start(16); // progressive render at ~60 Hz
   
   setMouseTracking(true);
   setFocusPolicy(Qt::StrongFocus);
@@ -42,10 +42,8 @@ void RenderWidget::applyViewAction(
 
   pitch_ = clampf(pitch_, -1.4f, 1.4f);
 
-  vec3f forward = normalizeVec(vec3f(std::cos(pitch_) * std::sin(yaw_),
-      std::sin(pitch_),
-      std::cos(pitch_) * std::cos(yaw_)));
-  vec3f right = normalizeVec(crossVec(forward, up_));
+  vec3f forward = forwardFromAngles(yaw_, pitch_);
+  vec3f right = normalizeVec(crossVec(forward, worldUp()));
   vec3f upCam = normalizeVec(crossVec(right, forward));
 
   if (result.action == Action::Translate) {
@@ -122,9 +120,10 @@ float RenderWidget::fitDistanceFromBounds(float maxExtent, float fovyDeg)
 
 void RenderWidget::syncFlyFromOrbit()
 {
-  vec3f eye(center_.x + dist_ * std::cos(pitch_) * std::sin(yaw_),
-      center_.y + dist_ * std::sin(pitch_),
-      center_.z + dist_ * std::cos(pitch_) * std::cos(yaw_));
+  vec3f forward = forwardFromAngles(yaw_, pitch_);
+  vec3f eye(center_.x - dist_ * forward.x,
+      center_.y - dist_ * forward.y,
+      center_.z - dist_ * forward.z);
 
   flyPos_ = eye;
   flyYaw_ = yaw_;
@@ -133,9 +132,7 @@ void RenderWidget::syncFlyFromOrbit()
 
 void RenderWidget::syncOrbitFromFly()
 {
-  vec3f forward(-std::cos(flyPitch_) * std::sin(flyYaw_),
-      -std::sin(flyPitch_),
-      -std::cos(flyPitch_) * std::cos(flyYaw_));
+  vec3f forward = forwardFromAngles(flyYaw_, flyPitch_);
   forward = normalizeVec(forward);
 
   vec3f eye = flyPos_;
@@ -172,6 +169,7 @@ void RenderWidget::initializeGL()
   initializeOpenGLFunctions();
 
   backend_.init();
+  backendReady_ = true;
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
@@ -196,29 +194,31 @@ void RenderWidget::syncCameraToBackend()
   if (inputMode_ == InputMode::Orbit) {
     pitch_ = clampf(pitch_, -1.4f, 1.4f);
 
-    vec3f eye(center_.x + dist_ * std::cos(pitch_) * std::sin(yaw_),
-        center_.y + dist_ * std::sin(pitch_),
-        center_.z + dist_ * std::cos(pitch_) * std::cos(yaw_));
+    vec3f forward = forwardFromAngles(yaw_, pitch_);
+    vec3f eye(center_.x - dist_ * forward.x,
+        center_.y - dist_ * forward.y,
+        center_.z - dist_ * forward.z);
 
-    backend_.setCamera(eye, center_, up_, fovy_);
+    backend_.setCamera(eye, center_, worldUp(), fovy_);
   } else {
     flyPitch_ = clampf(flyPitch_, -1.4f, 1.4f);
 
-    vec3f forward(-std::cos(flyPitch_) * std::sin(flyYaw_),
-        -std::sin(flyPitch_),
-        -std::cos(flyPitch_) * std::cos(flyYaw_));
+    vec3f forward = forwardFromAngles(flyYaw_, flyPitch_);
 
-    backend_.setCamera(flyPos_, flyPos_ + forward, up_, fovy_);
+    backend_.setCamera(flyPos_, flyPos_ + forward, worldUp(), fovy_);
   }
 }
 
 void RenderWidget::renderOnce()
 {
+  if (!backendReady_)
+    return;
+
   const uint32_t *px = backend_.render();
   const int w = backend_.width();
   const int h = backend_.height();
 
-  if (w <= 0 || h <= 0)
+  if (!px || w <= 0 || h <= 0)
     return;
 
   if (image_.width() != w || image_.height() != h)
@@ -226,6 +226,14 @@ void RenderWidget::renderOnce()
 
   std::memcpy(image_.bits(), px, size_t(w) * size_t(h) * 4);
   update();
+}
+
+void RenderWidget::advanceRender()
+{
+  if (!backendReady_ || !isVisible())
+    return;
+
+  renderOnce();
 }
 
 void RenderWidget::paintGL()
@@ -275,6 +283,9 @@ void RenderWidget::paintGL()
   ImGui::Text("UI FPS: %.1f", ImGui::GetIO().Framerate);
   ImGui::Text("Render time: %.2f ms", backend_.lastFrameTimeMs());
   ImGui::Text("Render FPS: %.1f", backend_.renderFPS());
+  ImGui::Text("Accumulated frames: %llu",
+      static_cast<unsigned long long>(backend_.accumulatedFrames()));
+  ImGui::Text("Up Axis: %s", upAxis_ == UpAxis::Z ? "Z" : "Y");
   ImGui::Text("Resolution: %d x %d", width(), height());
 
   ImGui::Separator();
@@ -313,7 +324,7 @@ void RenderWidget::paintGL()
   ImGui::Separator();
   ImGui::Text("Lighting");
 
-  if (ImGui::SliderInt("AO Samples", &backend_.getAoSamples(), 0, 100)) {
+  if (ImGui::SliderInt("AO Samples", &backend_.getAoSamples(), 0, 64)) {
     backend_.setAoSamples(backend_.getAoSamples());
     backend_.resetAccumulation();
     renderOnce();
@@ -360,6 +371,9 @@ bool RenderWidget::loadModel(const QString &path)
   if (!backend_.loadObj(path.toStdString()))
     return false;
 
+  currentBrlcadPath_.clear();
+  currentBrlcadObject_.clear();
+  currentBrlcadObjects_.clear();
   resetView();
   return true;
 }
@@ -369,8 +383,31 @@ bool RenderWidget::loadBrlcadModel(const QString &path, const QString &topObject
   if (!backend_.loadBrlcad(path.toStdString(), topObject.toStdString()))
     return false;
 
+  currentBrlcadPath_ = path;
+  currentBrlcadObject_ = topObject.trimmed().isEmpty() ? QStringLiteral("all")
+                                                       : topObject.trimmed();
+  currentBrlcadObjects_ = listBrlcadObjects(path);
   resetView();
   return true;
+}
+
+QStringList RenderWidget::listBrlcadObjects(const QString &path) const
+{
+  QStringList out;
+  try {
+    const auto names = backend_.listBrlcadObjects(path.toStdString());
+    for (const auto &name : names)
+      out << QString::fromStdString(name);
+  } catch (...) {
+  }
+  return out;
+}
+
+bool RenderWidget::reloadBrlcadObject(const QString &topObject)
+{
+  if (currentBrlcadPath_.isEmpty())
+    return false;
+  return loadBrlcadModel(currentBrlcadPath_, topObject);
 }
 
 QString RenderWidget::lastError() const
@@ -386,17 +423,15 @@ void RenderWidget::resetView()
   if (maxExtent < 0.001f)
     maxExtent = 1.0f;
 
-  up_ = vec3f(0.f, 1.f, 0.f);
-
   yaw_ = 0.3f;
   pitch_ = 0.2f;
   fovy_ = 60.0f;
 
   dist_ = fitDistanceFromBounds(maxExtent, fovy_);
 
-  flyPos_ = vec3f(center_.x, center_.y, center_.z - dist_);
-  flyYaw_ = 0.f;
-  flyPitch_ = 0.f;
+  flyYaw_ = yaw_;
+  flyPitch_ = pitch_;
+  syncFlyFromOrbit();
 
   backend_.resetAccumulation();
   syncCameraToBackend();
@@ -496,10 +531,8 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
     if (e->buttons() & Qt::RightButton) {
       pitch_ = clampf(pitch_, -1.4f, 1.4f);
 
-      vec3f forward = normalizeVec(vec3f(std::cos(pitch_) * std::sin(yaw_),
-          std::sin(pitch_),
-          std::cos(pitch_) * std::cos(yaw_)));
-      vec3f right = normalizeVec(crossVec(forward, up_));
+      vec3f forward = forwardFromAngles(yaw_, pitch_);
+      vec3f right = normalizeVec(crossVec(forward, worldUp()));
       vec3f upCam = normalizeVec(crossVec(right, forward));
 
       float sx = float(d.x()) * panSpeed_ * dist_;
@@ -592,10 +625,8 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
   if (inputMode_ != InputMode::Fly)
     return;
 
-  vec3f forward(-std::cos(flyPitch_) * std::sin(flyYaw_),
-      -std::sin(flyPitch_),
-      -std::cos(flyPitch_) * std::cos(flyYaw_));
-  vec3f right = normalizeVec(crossVec(forward, up_));
+  vec3f forward = forwardFromAngles(flyYaw_, flyPitch_);
+  vec3f right = normalizeVec(crossVec(forward, worldUp()));
 
   float modelScale = backend_.getBoundsMaxExtent();
   if (modelScale < 0.001f)
@@ -620,9 +651,13 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
         flyPos_.y + right.y * step,
         flyPos_.z + right.z * step);
   if (e->key() == Qt::Key_Q)
-    flyPos_ = vec3f(flyPos_.x, flyPos_.y - step, flyPos_.z);
+    flyPos_ = vec3f(flyPos_.x - worldUp().x * step,
+        flyPos_.y - worldUp().y * step,
+        flyPos_.z - worldUp().z * step);
   if (e->key() == Qt::Key_E)
-    flyPos_ = vec3f(flyPos_.x, flyPos_.y + step, flyPos_.z);
+    flyPos_ = vec3f(flyPos_.x + worldUp().x * step,
+        flyPos_.y + worldUp().y * step,
+        flyPos_.z + worldUp().z * step);
 
   backend_.resetAccumulation();
   syncCameraToBackend();
@@ -661,3 +696,71 @@ void RenderWidget::focusOutEvent(QFocusEvent *e)
   update();
 }
 
+void RenderWidget::setUpAxis(UpAxis axis)
+{
+  if (axis == upAxis_)
+    return;
+
+  upAxis_ = axis;
+  if (inputMode_ == InputMode::Orbit) {
+    syncFlyFromOrbit();
+  } else {
+    syncOrbitFromFly();
+  }
+
+  backend_.resetAccumulation();
+  syncCameraToBackend();
+  renderOnce();
+}
+
+RenderWidget::UpAxis RenderWidget::upAxis() const
+{
+  return upAxis_;
+}
+
+QString RenderWidget::currentBrlcadPath() const
+{
+  return currentBrlcadPath_;
+}
+
+QString RenderWidget::currentBrlcadObject() const
+{
+  return currentBrlcadObject_;
+}
+
+QStringList RenderWidget::currentBrlcadObjects() const
+{
+  return currentBrlcadObjects_;
+}
+
+bool RenderWidget::hasBrlcadScene() const
+{
+  return !currentBrlcadPath_.isEmpty();
+}
+
+vec3f RenderWidget::worldUp() const
+{
+  return upAxis_ == UpAxis::Z ? vec3f(0.f, 0.f, 1.f) : vec3f(0.f, 1.f, 0.f);
+}
+
+vec3f RenderWidget::worldForwardReference() const
+{
+  return upAxis_ == UpAxis::Z ? vec3f(0.f, 1.f, 0.f) : vec3f(0.f, 0.f, 1.f);
+}
+
+vec3f RenderWidget::forwardFromAngles(float yaw, float pitch) const
+{
+  const vec3f up = worldUp();
+  const vec3f forwardRef = worldForwardReference();
+  const vec3f rightRef = normalizeVec(crossVec(forwardRef, up));
+
+  const float cp = std::cos(pitch);
+  const float sp = std::sin(pitch);
+  const float cy = std::cos(yaw);
+  const float sy = std::sin(yaw);
+
+  const vec3f dir(rightRef.x * sy * cp + up.x * sp + forwardRef.x * cy * cp,
+      rightRef.y * sy * cp + up.y * sp + forwardRef.y * cy * cp,
+      rightRef.z * sy * cp + up.z * sp + forwardRef.z * cy * cp);
+  return normalizeVec(dir);
+}

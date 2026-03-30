@@ -391,24 +391,27 @@ void BRLCAD::commit()
       continue;
     objects.push_back(obj);
     const char *object = obj.c_str();
-    if (rt_gettrees(rtip, 1, &object, 1) < 0)
+    if (rt_gettrees(rtip, 1, &object, nThreads) < 0)
       throw std::runtime_error("Failed to load BRL-CAD object: " + obj);
   }
 
   if (objects.empty()) {
     static const char *allObj = "all";
-    if (rt_gettrees(rtip, 1, &allObj, 1) < 0)
+    if (rt_gettrees(rtip, 1, &allObj, nThreads) < 0)
       throw std::runtime_error("Failed to load default BRL-CAD object: all");
     objects.emplace_back(allObj);
   }
 
-  fprintf(stderr, "[C6] rt_prep_parallel\n");
-  rt_prep_parallel(rtip, nThreads);
+  resources.resize(nThreads);
+  fprintf(stderr, "[C6] rt_init_resource\n");
+  for (int i = 0; i < nThreads; ++i) {
+    rt_init_resource(&resources[i], i, rtip);
+  }
   fprintf(stderr, "[C6 OK]\n");
 
-  resources.resize(nThreads);
-  for (int i = 0; i < nThreads; ++i)
-    rt_init_resource(&resources[i], i, rtip);
+  fprintf(stderr, "[C7] rt_prep_parallel\n");
+  rt_prep_parallel(rtip, nThreads);
+  fprintf(stderr, "[C7 OK]\n");
 
   bounds.lower.x = rtip->mdl_min[0];
   bounds.lower.y = rtip->mdl_min[1];
@@ -418,7 +421,7 @@ void BRLCAD::commit()
   bounds.upper.z = rtip->mdl_max[2];
 
   fprintf(stderr,
-      "[C7] bounds min=(%f,%f,%f) max=(%f,%f,%f)\n",
+      "[C8] bounds min=(%f,%f,%f) max=(%f,%f,%f)\n",
       bounds.lower.x,
       bounds.lower.y,
       bounds.lower.z,
@@ -427,9 +430,9 @@ void BRLCAD::commit()
       bounds.upper.z);
 
   getSh()->brlcadSelf = this;
-  fprintf(stderr, "[C8] createEmbreeUserGeometry\n");
+  fprintf(stderr, "[C9] createEmbreeUserGeometry\n");
   createEmbreeUserGeometry((RTCBoundsFunction)brlcadBounds);
-  fprintf(stderr, "[C8 OK]\n");
+  fprintf(stderr, "[C9 OK]\n");
 
   getSh()->super.numPrimitives = static_cast<int>(numPrimitives());
   g_traceLogBudget.store(12);

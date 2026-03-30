@@ -1,7 +1,9 @@
 #include "mainwindow.h"
 #include "renderwidget.h"
 
+#include <algorithm>
 #include <QAction>
+#include <QActionGroup>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QInputDialog>
@@ -9,7 +11,6 @@
 #include <QMessageBox>
 
 #include <QLabel>
-
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
@@ -37,6 +38,7 @@ void MainWindow::setupMenus()
   fileMenu->addAction(exitAction);
 
   QMenu *viewMenu = menuBar()->addMenu("&View");
+  QMenu *brlcadMenu = menuBar()->addMenu("&Select Model");
 
   QAction *orbitModeAction = new QAction("Orbit Mode", this);
   orbitModeAction->setCheckable(true);
@@ -45,8 +47,27 @@ void MainWindow::setupMenus()
   QAction *flyModeAction = new QAction("Fly Mode", this);
   flyModeAction->setCheckable(true);
 
+  QActionGroup *upAxisGroup = new QActionGroup(this);
+  upAxisGroup->setExclusive(true);
+
+  QAction *yUpAction = new QAction("Y-Up", this);
+  yUpAction->setCheckable(true);
+  upAxisGroup->addAction(yUpAction);
+
+  QAction *zUpAction = new QAction("Z-Up", this);
+  zUpAction->setCheckable(true);
+  zUpAction->setChecked(true);
+  upAxisGroup->addAction(zUpAction);
+
   viewMenu->addAction(orbitModeAction);
   viewMenu->addAction(flyModeAction);
+  viewMenu->addSeparator();
+  viewMenu->addAction(yUpAction);
+  viewMenu->addAction(zUpAction);
+
+  selectBrlcadObjectAction_ = new QAction("Select Object...", this);
+  brlcadMenu->addAction(selectBrlcadObjectAction_);
+  updateBrlcadMenuState();
 
   connect(openAction, &QAction::triggered, this, [this]() {
     QString path = QFileDialog::getOpenFileName(this,
@@ -67,25 +88,13 @@ void MainWindow::setupMenus()
             "Load Failed",
             detail.isEmpty() ? "Could not load OBJ file." : detail);
       }
+      updateBrlcadMenuState();
       return;
     }
 
     if (ext == "g") {
-      bool ok = false;
-      QString obj = QInputDialog::getText(this,
-          "Load BRL-CAD Object",
-          "Enter object name to render\n(e.g. \"component\", \"all.g\", or a region name):",
-          QLineEdit::Normal, QString(), &ok);
-      if (!ok)
-        return;
-      if (!renderWidget_->loadBrlcadModel(path, obj)) {
-        const QString detail = renderWidget_->lastError();
-        QMessageBox::warning(this, "Load Failed",
-            detail.isEmpty()
-                ? "Could not load BRL-CAD .g file.\n"
-                  "Check that the object name exists in the database."
-                : detail);
-      }
+      chooseAndLoadBrlcadObject(path, renderWidget_->listBrlcadObjects(path));
+      updateBrlcadMenuState();
       return;
     }
 
@@ -117,4 +126,64 @@ void MainWindow::setupMenus()
         flyModeAction->setChecked(true);
         renderWidget_->setInputMode(RenderWidget::InputMode::Fly);
       });
+
+  connect(yUpAction, &QAction::triggered, this, [this, yUpAction, zUpAction]() {
+    yUpAction->setChecked(true);
+    zUpAction->setChecked(false);
+    renderWidget_->setUpAxis(RenderWidget::UpAxis::Y);
+  });
+
+  connect(zUpAction, &QAction::triggered, this, [this, yUpAction, zUpAction]() {
+    zUpAction->setChecked(true);
+    yUpAction->setChecked(false);
+    renderWidget_->setUpAxis(RenderWidget::UpAxis::Z);
+  });
+
+  connect(selectBrlcadObjectAction_, &QAction::triggered, this, [this]() {
+    chooseAndLoadBrlcadObject(
+        renderWidget_->currentBrlcadPath(), renderWidget_->currentBrlcadObjects());
+  });
+}
+
+void MainWindow::updateBrlcadMenuState()
+{
+  if (selectBrlcadObjectAction_)
+    selectBrlcadObjectAction_->setEnabled(renderWidget_->hasBrlcadScene());
+}
+
+void MainWindow::chooseAndLoadBrlcadObject(
+    const QString &path, const QStringList &objects)
+{
+  if (path.isEmpty())
+    return;
+
+  QStringList choices = objects;
+  if (choices.isEmpty())
+    choices << "all";
+
+  bool ok = false;
+  const QString current = renderWidget_->currentBrlcadObject().isEmpty()
+      ? QStringLiteral("all")
+      : renderWidget_->currentBrlcadObject();
+  const qsizetype foundIndex = choices.indexOf(current);
+  const int currentIndex = foundIndex >= 0 ? static_cast<int>(foundIndex) : 0;
+  const QString obj = QInputDialog::getItem(this,
+      "Load BRL-CAD Object",
+      "Choose or enter object name to render:",
+      choices,
+      currentIndex,
+      true,
+      &ok);
+  if (!ok)
+    return;
+
+  if (!renderWidget_->loadBrlcadModel(path, obj)) {
+    const QString detail = renderWidget_->lastError();
+    QMessageBox::warning(this, "Load Failed",
+        detail.isEmpty()
+            ? "Could not load BRL-CAD .g file.\n"
+              "Check that the object name exists in the database."
+            : detail);
+  }
+  updateBrlcadMenuState();
 }
