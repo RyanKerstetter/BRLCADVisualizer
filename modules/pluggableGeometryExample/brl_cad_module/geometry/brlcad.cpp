@@ -67,7 +67,7 @@ static inline int getNumThreads()
   return hc > 0 ? static_cast<int>(hc) : 1;
 }
 
-static std::atomic<int> g_traceLogBudget{12};
+static constexpr bool kVerboseBRLCADLogging = false;
 
 // ---------------------------------------------------------------------------
 // Embree ray-packet helpers
@@ -199,36 +199,7 @@ static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit, unsigned int geomID)
   hit.geomID = RTC_INVALID_GEOMETRY_ID;
   hit.primID = RTC_INVALID_GEOMETRY_ID;
 
-  const int logIndex = g_traceLogBudget.fetch_sub(1);
-  if (logIndex > 0) {
-    fprintf(stderr,
-        "traceRay[%d]: org=(%f,%f,%f) dir=(%f,%f,%f) tnear=%f tfar=%f resource=%zu\n",
-        logIndex,
-        ray.org_x,
-        ray.org_y,
-        ray.org_z,
-        ray.dir_x,
-        ray.dir_y,
-        ray.dir_z,
-        ray.tnear,
-        ray.tfar,
-        resourceIndex);
-    fflush(stderr);
-  }
-
-  if (logIndex > 0) {
-    fprintf(stderr, "traceRay[%d]: before rt_shootray\n", logIndex);
-    fflush(stderr);
-  }
   auto didHit = rt_shootray(&ap);
-  if (logIndex > 0) {
-    fprintf(stderr, "traceRay[%d]: after rt_shootray didHit=%d geomID=%u tfar=%f\n",
-        logIndex,
-        didHit,
-        hit.geomID,
-        ray.tfar);
-    fflush(stderr);
-  }
   if (didHit <= 0) {
     hit.geomID = RTC_INVALID_GEOMETRY_ID;
     hit.primID = RTC_INVALID_GEOMETRY_ID;
@@ -321,8 +292,6 @@ extern "C" void brlcadIntersectN_C(void *self,
 BRLCAD::BRLCAD(api::ISPCDevice &device)
     : AddStructShared(device.getDRTDevice(), device, FFG_BOX)
 {
-  fprintf(stderr, "BRLCAD constructor called\n");
-  fflush(stderr);
 #ifndef OSPRAY_TARGET_SYCL
   getSh()->super.postIntersect =
       reinterpret_cast<ispc::Geometry_postIntersectFct>(
@@ -363,26 +332,11 @@ void BRLCAD::commit()
   std::string objectList = getParam<std::string>("objects", "all");
   const int nThreads = getNumThreads();
 
-  fprintf(stderr, "=== BRLCAD::commit START ===\n");
-  fprintf(stderr, "[C1] filename=%s\n", filename.c_str());
-  fprintf(stderr, "[C2] objects=%s\n", objectList.c_str());
-  fprintf(stderr, "[C3] nThreads=%d\n", nThreads);
-  fflush(stderr);
-
-  //
-
-  fprintf(stderr, "[C4] rt_dirbuild\n");
   rtip = rt_dirbuild(filename.c_str(), nullptr, 0);
-  fprintf(stderr, "[C4 %s]\n", rtip ? "OK" : "FAIL");
-  fflush(stderr);
-
   if (rtip == nullptr)
     throw std::runtime_error("Failed to open BRL-CAD database: " + filename);
 
   resources.clear();
-
-  fprintf(stderr, "[C5] rt_gettrees\n");
-  fflush(stderr);
 
   objects.clear();
   auto objNames = splitCSV(objectList);
@@ -403,15 +357,10 @@ void BRLCAD::commit()
   }
 
   resources.resize(nThreads);
-  fprintf(stderr, "[C6] rt_init_resource\n");
   for (int i = 0; i < nThreads; ++i) {
     rt_init_resource(&resources[i], i, rtip);
   }
-  fprintf(stderr, "[C6 OK]\n");
-
-  fprintf(stderr, "[C7] rt_prep_parallel\n");
   rt_prep_parallel(rtip, nThreads);
-  fprintf(stderr, "[C7 OK]\n");
 
   bounds.lower.x = rtip->mdl_min[0];
   bounds.lower.y = rtip->mdl_min[1];
@@ -420,24 +369,21 @@ void BRLCAD::commit()
   bounds.upper.y = rtip->mdl_max[1];
   bounds.upper.z = rtip->mdl_max[2];
 
-  fprintf(stderr,
-      "[C8] bounds min=(%f,%f,%f) max=(%f,%f,%f)\n",
-      bounds.lower.x,
-      bounds.lower.y,
-      bounds.lower.z,
-      bounds.upper.x,
-      bounds.upper.y,
-      bounds.upper.z);
+  if (kVerboseBRLCADLogging) {
+    fprintf(stderr,
+        "BRLCAD bounds min=(%f,%f,%f) max=(%f,%f,%f)\n",
+        bounds.lower.x,
+        bounds.lower.y,
+        bounds.lower.z,
+        bounds.upper.x,
+        bounds.upper.y,
+        bounds.upper.z);
+  }
 
   getSh()->brlcadSelf = this;
-  fprintf(stderr, "[C9] createEmbreeUserGeometry\n");
   createEmbreeUserGeometry((RTCBoundsFunction)brlcadBounds);
-  fprintf(stderr, "[C9 OK]\n");
 
   getSh()->super.numPrimitives = static_cast<int>(numPrimitives());
-  g_traceLogBudget.store(12);
-  fprintf(stderr, "=== BRLCAD::commit SUCCESS ===\n");
-  fflush(stderr);
 }
 } // namespace brlcad
 } // namespace ospray

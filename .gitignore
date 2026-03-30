@@ -48,3 +48,5 @@ scripts/superbuild/build/
 QtOsprayViewer/build*/
 **/.qtcreator/
 imgui.ini
+/dist
+/QtOsprayViewer/QtOsprayViewer/IBRT

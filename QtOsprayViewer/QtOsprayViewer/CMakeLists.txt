@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(QtOsprayViewer VERSION 0.1 LANGUAGES CXX)
+project(IBRT VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
@@ -63,6 +63,10 @@ qt_add_executable(QtOsprayViewer
     ospraybackend.h
     interactioncontroller.cpp
     interactioncontroller.h
+)
+
+set_target_properties(QtOsprayViewer PROPERTIES
+    OUTPUT_NAME "IBRT"
 )
 
 target_sources(QtOsprayViewer PRIVATE

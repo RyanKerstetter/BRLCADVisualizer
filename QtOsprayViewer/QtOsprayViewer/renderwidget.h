@@ -83,6 +83,15 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   rkcommon::math::vec3f worldUp() const;
   rkcommon::math::vec3f worldForwardReference() const;
   rkcommon::math::vec3f forwardFromAngles(float yaw, float pitch) const;
+  void anglesFromForward(
+      const rkcommon::math::vec3f &forward, float &yaw, float &pitch) const;
+  rkcommon::math::vec3f projectOntoPlane(
+      const rkcommon::math::vec3f &v, const rkcommon::math::vec3f &normal) const;
+  rkcommon::math::vec3f orbitRight() const;
+  void alignOrbitUpToReference();
+  rkcommon::math::vec3f rotateAroundAxis(
+      const rkcommon::math::vec3f &v, const rkcommon::math::vec3f &axis, float angle) const;
+  void rotateOrbit(float yawDelta, float pitchDelta);
   float flyMoveFactor_ = 0.005f;
   void syncCameraToBackend();
   void renderOnce();
@@ -107,6 +116,8 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
 
   // Orbit camera
   rkcommon::math::vec3f center_{0.f, 0.f, 1.5f};
+  rkcommon::math::vec3f orbitForward_{0.f, 1.f, 0.f};
+  rkcommon::math::vec3f orbitUp_{0.f, 0.f, 1.f};
 
   float yaw_ = 0.3f;
   float pitch_ = 0.2f;

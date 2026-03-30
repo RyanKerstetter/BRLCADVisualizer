@@ -541,7 +541,6 @@ std::vector<std::string> OsprayBackend::listBrlcadObjects(
   const size_t count =
       db_ls(tmpRtip->rti_dbip, DB_LS_TOPS | DB_LS_COMB | DB_LS_REGION, nullptr, &dpv);
 
-  names.emplace_back("all");
   for (size_t i = 0; i < count; ++i) {
     if (dpv[i] && dpv[i]->d_namep && *dpv[i]->d_namep)
       names.emplace_back(dpv[i]->d_namep);

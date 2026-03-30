@@ -17,7 +17,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
   renderWidget_ = new RenderWidget(this);
   setCentralWidget(renderWidget_);
   resize(1200, 800);
-  setWindowTitle("Qt OSPRay Viewer");
+  setWindowTitle("Interactive BRLCAD Ray Tracing - IBRT");
 
   setupMenus();
 }
@@ -158,13 +158,15 @@ void MainWindow::chooseAndLoadBrlcadObject(
     return;
 
   QStringList choices = objects;
-  if (choices.isEmpty())
-    choices << "all";
+  if (choices.isEmpty()) {
+    QMessageBox::warning(this,
+        "No Objects Found",
+        "No selectable BRL-CAD objects were found in this .g file.");
+    return;
+  }
 
   bool ok = false;
-  const QString current = renderWidget_->currentBrlcadObject().isEmpty()
-      ? QStringLiteral("all")
-      : renderWidget_->currentBrlcadObject();
+  const QString current = renderWidget_->currentBrlcadObject();
   const qsizetype foundIndex = choices.indexOf(current);
   const int currentIndex = foundIndex >= 0 ? static_cast<int>(foundIndex) : 0;
   const QString obj = QInputDialog::getItem(this,
