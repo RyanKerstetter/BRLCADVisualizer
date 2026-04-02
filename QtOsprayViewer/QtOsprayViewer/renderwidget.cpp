@@ -214,7 +214,8 @@ void RenderWidget::renderOnce()
   if (!backendReady_)
     return;
 
-  const uint32_t *px = backend_.render();
+  const bool updatedImage = backend_.advanceRender(renderBudgetMs_);
+  const uint32_t *px = backend_.pixels();
   const int w = backend_.width();
   const int h = backend_.height();
 
@@ -224,8 +225,16 @@ void RenderWidget::renderOnce()
   if (image_.width() != w || image_.height() != h)
     image_ = QImage(w, h, QImage::Format_RGBA8888);
 
-  std::memcpy(image_.bits(), px, size_t(w) * size_t(h) * 4);
-  update();
+  if (updatedImage) {
+    std::memcpy(image_.bits(), px, size_t(w) * size_t(h) * 4);
+    update();
+
+    const float frameMs = backend_.lastFrameTimeMs();
+    if (frameMs < 10.0f)
+      renderBudgetMs_ = std::min(10, renderBudgetMs_ + 1);
+    else if (frameMs > 22.0f)
+      renderBudgetMs_ = std::max(3, renderBudgetMs_ - 1);
+  }
 }
 
 void RenderWidget::advanceRender()
@@ -285,6 +294,10 @@ void RenderWidget::paintGL()
   ImGui::Text("Render FPS: %.1f", backend_.renderFPS());
   ImGui::Text("Accumulated frames: %llu",
       static_cast<unsigned long long>(backend_.accumulatedFrames()));
+  ImGui::Text("Watchdog cancels: %llu",
+      static_cast<unsigned long long>(backend_.watchdogCancelCount()));
+  ImGui::Text("AO auto-reductions: %llu",
+      static_cast<unsigned long long>(backend_.aoAutoReductionCount()));
   ImGui::Text("Up Axis: %s", upAxis_ == UpAxis::Z ? "Z" : "Y");
   ImGui::Text("Resolution: %d x %d", width(), height());
 
@@ -322,11 +335,130 @@ void RenderWidget::paintGL()
   }
 
   ImGui::Separator();
-  ImGui::Text("Lighting");
+  ImGui::Text("Render Settings");
 
-  if (ImGui::SliderInt("AO Samples", &backend_.getAoSamples(), 0, 64)) {
-    backend_.setAoSamples(backend_.getAoSamples());
-    backend_.resetAccumulation();
+  bool settingsChanged = false;
+  int settingsMode = backend_.settingsMode() == OsprayBackend::SettingsMode::Automatic ? 0 : 1;
+  if (ImGui::RadioButton("Automatic", settingsMode == 0)) {
+    backend_.setSettingsMode(OsprayBackend::SettingsMode::Automatic);
+    settingsChanged = true;
+  }
+  ImGui::SameLine();
+  if (ImGui::RadioButton("Custom", settingsMode == 1)) {
+    backend_.setSettingsMode(OsprayBackend::SettingsMode::Custom);
+    settingsChanged = true;
+  }
+
+  if (backend_.settingsMode() == OsprayBackend::SettingsMode::Automatic) {
+    ImGui::SeparatorText("Automatic");
+
+    int preset = 1;
+    if (backend_.automaticPreset() == OsprayBackend::AutomaticPreset::Fast)
+      preset = 0;
+    else if (backend_.automaticPreset() == OsprayBackend::AutomaticPreset::Balanced)
+      preset = 1;
+    else
+      preset = 2;
+    const char *presetLabels[] = {"Fast", "Balanced", "Quality"};
+    if (ImGui::Combo("Preset", &preset, presetLabels, IM_ARRAYSIZE(presetLabels))) {
+      if (preset == 0)
+        backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Fast);
+      else if (preset == 1)
+        backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Balanced);
+      else
+        backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Quality);
+      settingsChanged = true;
+    }
+
+    float targetMs = backend_.automaticTargetFrameTimeMs();
+    if (ImGui::DragFloat("Target Frame Time (ms)", &targetMs, 0.1f, 2.0f, 1000.0f, "%.1f")) {
+      backend_.setAutomaticTargetFrameTimeMs(targetMs);
+      settingsChanged = true;
+    }
+
+    bool accumEnabled = backend_.automaticAccumulationEnabled();
+    if (ImGui::Checkbox("Accumulation", &accumEnabled)) {
+      backend_.setAutomaticAccumulationEnabled(accumEnabled);
+      settingsChanged = true;
+    }
+
+    if (ImGui::Button("Reset Render")) {
+      backend_.resetAccumulation();
+      settingsChanged = true;
+    }
+  } else {
+    ImGui::SeparatorText("Custom");
+
+    int startScale = backend_.customStartScale();
+    if (ImGui::SliderInt("Start Scale", &startScale, 1, 16)) {
+      backend_.setCustomStartScale(startScale);
+      settingsChanged = true;
+    }
+
+    float targetMs = backend_.customTargetFrameTimeMs();
+    if (ImGui::DragFloat("Target Frame Time (ms)", &targetMs, 0.1f, 2.0f, 1000.0f, "%.1f")) {
+      backend_.setCustomTargetFrameTimeMs(targetMs);
+      settingsChanged = true;
+    }
+
+    int aoSamples = backend_.customAoSamples();
+    if (ImGui::SliderInt("AO Samples", &aoSamples, 0, 32)) {
+      backend_.setAoSamples(aoSamples);
+      settingsChanged = true;
+    }
+
+    int pixelSamples = backend_.customPixelSamples();
+    if (ImGui::SliderInt("Pixel Samples", &pixelSamples, 1, 64)) {
+      backend_.setPixelSamples(pixelSamples);
+      settingsChanged = true;
+    }
+
+    bool accumEnabled = backend_.customAccumulationEnabled();
+    if (ImGui::Checkbox("Accumulation Enabled", &accumEnabled)) {
+      backend_.setCustomAccumulationEnabled(accumEnabled);
+      settingsChanged = true;
+    }
+
+    int maxAccumFrames = backend_.customMaxAccumulationFrames();
+    if (ImGui::InputInt("Max Accumulation Frames", &maxAccumFrames)) {
+      backend_.setCustomMaxAccumulationFrames(maxAccumFrames);
+      settingsChanged = true;
+    }
+
+    bool lowQualityInteract = backend_.customLowQualityWhileInteracting();
+    if (ImGui::Checkbox("Low Quality While Interacting", &lowQualityInteract)) {
+      backend_.setCustomLowQualityWhileInteracting(lowQualityInteract);
+      settingsChanged = true;
+    }
+
+    bool fullResAccumOnly = backend_.customFullResAccumulationOnly();
+    if (ImGui::Checkbox("Full-res Accumulation Only", &fullResAccumOnly)) {
+      backend_.setCustomFullResAccumulationOnly(fullResAccumOnly);
+      settingsChanged = true;
+    }
+
+    int watchdogMs = backend_.customWatchdogTimeoutMs();
+    if (ImGui::InputInt("Watchdog Timeout (ms)", &watchdogMs)) {
+      backend_.setCustomWatchdogTimeoutMs(watchdogMs);
+      settingsChanged = true;
+    }
+
+    if (ImGui::Button("Reset Render")) {
+      backend_.resetAccumulation();
+      settingsChanged = true;
+    }
+  }
+
+  ImGui::SeparatorText("Diagnostics");
+  ImGui::Text("Current scale: %dx", backend_.currentScale());
+  ImGui::Text("Last render time: %.2f ms", backend_.lastFrameTimeMs());
+  ImGui::Text("Accumulation frames: %llu",
+      static_cast<unsigned long long>(backend_.accumulatedFrames()));
+  ImGui::Text("Dynamic mode active: %s",
+      backend_.dynamicModeActive() ? "Yes" : "No");
+  ImGui::Text("Backoff applied: %s", backend_.backoffApplied() ? "Yes" : "No");
+
+  if (settingsChanged) {
     renderOnce();
     update();
   }
@@ -476,6 +608,7 @@ void RenderWidget::mousePressEvent(QMouseEvent *e)
   if (ImGui::GetIO().WantCaptureMouse)
     return;
 
+  backend_.setInteracting(true);
   lastMouse_ = e->pos();
 }
 
@@ -489,6 +622,8 @@ void RenderWidget::mouseReleaseEvent(QMouseEvent *e)
     imguiMouseDown_[2] = false;
 
   imguiMousePos_ = e->position();
+  if (!(imguiMouseDown_[0] || imguiMouseDown_[1] || imguiMouseDown_[2]))
+    backend_.setInteracting(false);
   update();
 }
 
@@ -507,6 +642,8 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
 
   if (io.WantCaptureMouse)
     return;
+
+  backend_.setInteracting(e->buttons() != Qt::NoButton);
 
   const QPoint d = e->pos() - lastMouse_;
   lastMouse_ = e->pos();
@@ -567,6 +704,8 @@ void RenderWidget::wheelEvent(QWheelEvent *e)
   if (ImGui::GetIO().WantCaptureMouse)
     return;
 
+  backend_.setInteracting(true);
+
   float steps = e->angleDelta().y() / 120.f;
   if (steps == 0.f)
     return;
@@ -589,6 +728,7 @@ void RenderWidget::wheelEvent(QWheelEvent *e)
   backend_.resetAccumulation();
   syncCameraToBackend();
   renderOnce();
+  backend_.setInteracting(false);
 }
 
 void RenderWidget::keyPressEvent(QKeyEvent *e)
@@ -610,6 +750,12 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
 
   if (io.WantCaptureKeyboard)
     return;
+
+  if (e->key() == Qt::Key_W || e->key() == Qt::Key_A || e->key() == Qt::Key_S
+      || e->key() == Qt::Key_D || e->key() == Qt::Key_Q || e->key() == Qt::Key_E
+      || e->key() == Qt::Key_Tab) {
+    backend_.setInteracting(true);
+  }
 
   if (e->key() == Qt::Key_Tab) {
     inputMode_ =
@@ -678,6 +824,15 @@ void RenderWidget::keyReleaseEvent(QKeyEvent *e)
   sendKey(Qt::Key_D, ImGuiKey_D);
   sendKey(Qt::Key_Q, ImGuiKey_Q);
   sendKey(Qt::Key_E, ImGuiKey_E);
+
+  if (io.WantCaptureKeyboard)
+    return;
+
+  if (e->key() == Qt::Key_W || e->key() == Qt::Key_A || e->key() == Qt::Key_S
+      || e->key() == Qt::Key_D || e->key() == Qt::Key_Q || e->key() == Qt::Key_E
+      || e->key() == Qt::Key_Tab) {
+    backend_.setInteracting(false);
+  }
 }
 
 void RenderWidget::focusInEvent(QFocusEvent *e)
@@ -691,6 +846,7 @@ void RenderWidget::focusOutEvent(QFocusEvent *e)
 {
   Q_UNUSED(e);
   imguiHasFocus_ = false;
+  backend_.setInteracting(false);
   update();
 }
 

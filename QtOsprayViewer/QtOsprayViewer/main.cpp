@@ -1,5 +1,7 @@
 #include <QApplication>
+#include <QMessageBox>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <thread>
 
@@ -8,9 +10,10 @@
 #include "mainwindow.h"
 
 #ifdef _WIN32
+#include <windows.h>
+#include <dbghelp.h>
 #include <fcntl.h>
 #include <io.h>
-#include <windows.h>
 #endif
 
 #ifdef _WIN32
@@ -96,6 +99,62 @@ static void installStderrFilter()
     CloseHandle(readPipe);
   }).detach();
 }
+
+static LONG WINAPI crashDumpExceptionFilter(EXCEPTION_POINTERS *exceptionInfo)
+{
+  char exePath[MAX_PATH] = {};
+  GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+
+  char dirPath[MAX_PATH] = {};
+  std::strncpy(dirPath, exePath, MAX_PATH - 1);
+  for (int i = int(std::strlen(dirPath)) - 1; i >= 0; --i) {
+    if (dirPath[i] == '\\' || dirPath[i] == '/') {
+      dirPath[i] = '\0';
+      break;
+    }
+  }
+
+  SYSTEMTIME st{};
+  GetLocalTime(&st);
+
+  char dumpPath[MAX_PATH] = {};
+  std::snprintf(dumpPath,
+      MAX_PATH,
+      "%s\\IBRT_crash_%04u%02u%02u_%02u%02u%02u.dmp",
+      dirPath,
+      st.wYear,
+      st.wMonth,
+      st.wDay,
+      st.wHour,
+      st.wMinute,
+      st.wSecond);
+
+  HANDLE hFile = CreateFileA(
+      dumpPath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (hFile != INVALID_HANDLE_VALUE) {
+    MINIDUMP_EXCEPTION_INFORMATION dumpInfo{};
+    dumpInfo.ThreadId = GetCurrentThreadId();
+    dumpInfo.ExceptionPointers = exceptionInfo;
+    dumpInfo.ClientPointers = FALSE;
+
+    MiniDumpWriteDump(GetCurrentProcess(),
+        GetCurrentProcessId(),
+        hFile,
+        static_cast<MINIDUMP_TYPE>(MiniDumpWithDataSegs | MiniDumpWithThreadInfo
+            | MiniDumpWithIndirectlyReferencedMemory),
+        &dumpInfo,
+        nullptr,
+        nullptr);
+    CloseHandle(hFile);
+  }
+
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+
+static void installCrashDumpHandler()
+{
+  SetUnhandledExceptionFilter(crashDumpExceptionFilter);
+}
 #endif
 
 static void osprayErrorCallback(void *, OSPError error, const char *message)
@@ -112,10 +171,20 @@ static void osprayStatusCallback(void *, const char *message)
   (void)message;
 }
 
+static void showFatalStartupError(const char *message)
+{
+#ifdef _WIN32
+  MessageBoxA(nullptr, message, "IBRT Startup Error", MB_ICONERROR | MB_OK);
+#else
+  fprintf(stderr, "%s\n", message ? message : "Unknown startup error.");
+#endif
+}
+
 int main(int argc, char *argv[])
 {
 #ifdef _WIN32
   installStderrFilter();
+  installCrashDumpHandler();
 #endif
 
   int ac = argc;
@@ -124,12 +193,14 @@ int main(int argc, char *argv[])
   const OSPError err = ospInit(&ac, av);
   if (err != OSP_NO_ERROR) {
     fprintf(stderr, "IBRT: OSPRay initialization failed.\n");
+    showFatalStartupError("IBRT: OSPRay initialization failed.");
     return 1;
   }
 
   OSPDevice device = ospNewDevice("cpu");
   if (!device) {
     fprintf(stderr, "IBRT: Failed to create OSPRay CPU device.\n");
+    showFatalStartupError("IBRT: Failed to create OSPRay CPU device.");
     return 1;
   }
 
@@ -140,10 +211,7 @@ int main(int argc, char *argv[])
 
   if (ospLoadModule("cpu") != OSP_NO_ERROR) {
     fprintf(stderr, "IBRT: Failed to load OSPRay CPU module.\n");
-    return 1;
-  }
-  if (ospLoadModule("brl_cad") != OSP_NO_ERROR) {
-    fprintf(stderr, "IBRT: Failed to load BRL-CAD OSPRay module.\n");
+    showFatalStartupError("IBRT: Failed to load OSPRay CPU module.");
     return 1;
   }
 

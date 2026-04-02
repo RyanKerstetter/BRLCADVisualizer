@@ -49,6 +49,26 @@ set(BRLCAD_PREFIX "" CACHE PATH "BRL-CAD prefix")
 if(NOT BRLCAD_PREFIX)
     message(FATAL_ERROR "BRLCAD_PREFIX is not set. Pass it with -DBRLCAD_PREFIX=<path>")
 endif()
+
+# Optional explicit BRL-CAD OSPRay module deployment inputs.
+set(BRLCAD_OSPRAY_MODULE_DLL "" CACHE FILEPATH
+    "Path to ospray_module_brl_cad.dll (optional; auto-detected from known bin dirs if unset)")
+set(BRLCAD_OSPRAY_MODULE_DEPLOY_DIR "" CACHE PATH
+    "Optional directory with extra DLL dependencies for ospray_module_brl_cad.dll")
+
+if(WIN32 AND NOT BRLCAD_OSPRAY_MODULE_DLL)
+    foreach(_candidate
+            "${OSPRAY_PREFIX}/bin/ospray_module_brl_cad.dll"
+            "${BRLCAD_PREFIX}/bin/ospray_module_brl_cad.dll")
+        if(EXISTS "${_candidate}")
+            set(BRLCAD_OSPRAY_MODULE_DLL "${_candidate}" CACHE FILEPATH
+                "Path to ospray_module_brl_cad.dll (optional; auto-detected from known bin dirs if unset)"
+                FORCE)
+            break()
+        endif()
+    endforeach()
+endif()
+
 find_path(BRLCAD_INCLUDE_DIR brlcad/rt/db4.h PATHS "${BRLCAD_PREFIX}/include" REQUIRED)
 find_library(BRLCAD_RT_LIBRARY NAMES rt librt PATHS "${BRLCAD_PREFIX}/lib" NO_DEFAULT_PATH REQUIRED)
 find_library(BRLCAD_BU_LIBRARY NAMES bu libbu PATHS "${BRLCAD_PREFIX}/lib" NO_DEFAULT_PATH REQUIRED)
@@ -97,6 +117,7 @@ target_link_libraries(QtOsprayViewer PRIVATE
     ${BRLCAD_RT_LIBRARY}
     ${BRLCAD_BU_LIBRARY}
     $<$<BOOL:${WIN32}>:TBB::tbb>
+    $<$<BOOL:${WIN32}>:dbghelp>
 )
 
 if(WIN32)
@@ -129,6 +150,26 @@ if(WIN32)
             "${BRLCAD_PREFIX}/bin"
             "$<TARGET_FILE_DIR:QtOsprayViewer>"
         COMMENT "Copying BRL-CAD runtime DLLs...")
+
+    if(BRLCAD_OSPRAY_MODULE_DLL AND EXISTS "${BRLCAD_OSPRAY_MODULE_DLL}")
+        add_custom_command(TARGET QtOsprayViewer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${BRLCAD_OSPRAY_MODULE_DLL}"
+                "$<TARGET_FILE_DIR:QtOsprayViewer>/ospray_module_brl_cad.dll"
+            COMMENT "Deploying ospray_module_brl_cad.dll...")
+    else()
+        message(WARNING
+            "ospray_module_brl_cad.dll was not found. "
+            "Set -DBRLCAD_OSPRAY_MODULE_DLL=<full path> so ospLoadModule(\"brl_cad\") can succeed at runtime.")
+    endif()
+
+    if(BRLCAD_OSPRAY_MODULE_DEPLOY_DIR AND EXISTS "${BRLCAD_OSPRAY_MODULE_DEPLOY_DIR}")
+        add_custom_command(TARGET QtOsprayViewer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${BRLCAD_OSPRAY_MODULE_DEPLOY_DIR}"
+                "$<TARGET_FILE_DIR:QtOsprayViewer>"
+            COMMENT "Copying extra BRL-CAD module dependency DLLs...")
+    endif()
 
     # Force the correct rkcommon.dll and embree4.dll — OpenVKL ships older
     # mismatched versions that get copied last and would override them.

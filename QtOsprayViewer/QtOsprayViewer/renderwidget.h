@@ -110,6 +110,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   QPoint lastMouse_;
   QTimer *renderTimer_ = nullptr;
   bool backendReady_ = false;
+  int renderBudgetMs_ = 6;
 
   InputMode inputMode_ = InputMode::Orbit;
   UpAxis upAxis_ = UpAxis::Z;

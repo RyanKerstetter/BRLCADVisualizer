@@ -50,3 +50,18 @@ QtOsprayViewer/build*/
 imgui.ini
 /dist
 /QtOsprayViewer/QtOsprayViewer/IBRT
+
+# Local BRL-CAD module build tree
+/bcs/
+
+# In-source CMake generator artifacts
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/CMakeScripts/
+**/Makefile
+**/CMakeUserPresets.json
+
+# Visual Studio local database/cache files
+*.VC.db
+*.VC.opendb
