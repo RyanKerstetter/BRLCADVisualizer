@@ -87,6 +87,23 @@ class RenderBackendWorker : public QObject
     emit stateChanged(snapshot());
   }
 
+  void enqueueCameraUpdate(
+      const vec3f &eye, const vec3f &center, const vec3f &up, float fovy, bool resetAccumulation)
+  {
+    pendingEye_ = eye;
+    pendingCenter_ = center;
+    pendingUp_ = up;
+    pendingFovy_ = fovy;
+    pendingCameraReset_ = pendingCameraReset_ || resetAccumulation;
+    cameraUpdateSerial_++;
+  }
+
+  void enqueueInteracting(bool interacting)
+  {
+    pendingInteracting_ = interacting;
+    interactingUpdateSerial_++;
+  }
+
   BackendSnapshot snapshot() const
   {
     const auto center = backend_.getBoundsCenter();
@@ -166,6 +183,19 @@ class RenderBackendWorker : public QObject
     if (!backendReady_)
       return;
 
+    if (appliedInteractingUpdateSerial_ != interactingUpdateSerial_) {
+      backend_.setInteracting(pendingInteracting_);
+      appliedInteractingUpdateSerial_ = interactingUpdateSerial_;
+    }
+
+    if (appliedCameraUpdateSerial_ != cameraUpdateSerial_) {
+      if (pendingCameraReset_)
+        backend_.resetAccumulation();
+      pendingCameraReset_ = false;
+      backend_.setCamera(pendingEye_, pendingCenter_, pendingUp_, pendingFovy_);
+      appliedCameraUpdateSerial_ = cameraUpdateSerial_;
+    }
+
     const bool updatedImage = backend_.advanceRender(0);
     if (!updatedImage)
       return;
@@ -184,6 +214,16 @@ class RenderBackendWorker : public QObject
  private:
   bool backendReady_ = false;
   QTimer *renderTimer_ = nullptr;
+  vec3f pendingEye_{0.f, 0.f, 0.f};
+  vec3f pendingCenter_{0.f, 0.f, 0.f};
+  vec3f pendingUp_{0.f, 0.f, 1.f};
+  float pendingFovy_ = 60.0f;
+  bool pendingCameraReset_ = false;
+  bool pendingInteracting_ = false;
+  uint64_t cameraUpdateSerial_ = 0;
+  uint64_t appliedCameraUpdateSerial_ = 0;
+  uint64_t interactingUpdateSerial_ = 0;
+  uint64_t appliedInteractingUpdateSerial_ = 0;
 };
 
 template <typename F>
@@ -649,9 +689,7 @@ void RenderWidget::flushQueuedCameraUpdate()
 
   invokeWorkerAsync(backendWorker_,
       [eye, center, up, fovy, resetAccumulation](RenderBackendWorker &worker) {
-        if (resetAccumulation)
-          worker.backend_.resetAccumulation();
-        worker.backend_.setCamera(eye, center, up, fovy);
+        worker.enqueueCameraUpdate(eye, center, up, fovy, resetAccumulation);
       });
 }
 
@@ -666,7 +704,7 @@ void RenderWidget::queueInteracting(bool interacting)
 
   invokeWorkerAsync(backendWorker_,
       [interacting](RenderBackendWorker &worker) {
-        worker.backend_.setInteracting(interacting);
+        worker.enqueueInteracting(interacting);
       });
 
   if (!interactionActive_ && pendingCameraReset_)
