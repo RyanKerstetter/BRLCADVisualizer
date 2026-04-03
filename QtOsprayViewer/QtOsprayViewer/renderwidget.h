@@ -7,14 +7,18 @@
 #include <QOpenGLFunctions>
 #include <QOpenGLWidget>
 #include <QPoint>
+#include <QSize>
 #include <QString>
-#include <QTimer>
 #include <QWheelEvent>
 
 #include <ospray/ospray_cpp/ext/rkcommon.h>
 #include "imgui.h"
 #include "ospraybackend.h"
 #include "interactioncontroller.h"
+
+class QThread;
+class QTimer;
+class RenderBackendWorker;
 
 class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
 {
@@ -104,13 +108,76 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
 
   void applyViewAction(const InteractionController::Result &result, const QPoint &delta);
   void applyObjectAction(const InteractionController::Result &result, const QPoint &delta);
+  void queueCameraUpdate(bool resetAccumulation);
+  void flushQueuedCameraUpdate();
+  void queueInteracting(bool interacting);
+  void applyBackendSnapshot(const QString &lastError,
+      const QString &currentRenderer,
+      const rkcommon::math::vec3f &boundsCenter,
+      float boundsMaxExtent,
+      float lastFrameTimeMs,
+      float renderFps,
+      uint64_t accumulatedFrames,
+      uint64_t watchdogCancelCount,
+      uint64_t aoAutoReductionCount,
+      int currentScale,
+      bool dynamicModeActive,
+      bool backoffApplied,
+      OsprayBackend::SettingsMode settingsMode,
+      OsprayBackend::AutomaticPreset automaticPreset,
+      float automaticTargetFrameTimeMs,
+      bool automaticAccumulationEnabled,
+      int customStartScale,
+      float customTargetFrameTimeMs,
+      int customAoSamples,
+      int customPixelSamples,
+      bool customAccumulationEnabled,
+      int customMaxAccumulationFrames,
+      bool customLowQualityWhileInteracting,
+      bool customFullResAccumulationOnly,
+      int customWatchdogTimeoutMs);
+  void applyBackendImage(const QImage &image);
 
-  OsprayBackend backend_;
   QImage image_;
+  QSize imageSize_;
+  QSize textureSize_;
   QPoint lastMouse_;
-  QTimer *renderTimer_ = nullptr;
   bool backendReady_ = false;
-  int renderBudgetMs_ = 6;
+  QThread *backendThread_ = nullptr;
+  RenderBackendWorker *backendWorker_ = nullptr;
+  QTimer *cameraUpdateTimer_ = nullptr;
+  bool pendingCameraReset_ = false;
+  bool interactionActive_ = false;
+  QString lastError_;
+  QString currentRenderer_ = QStringLiteral("scivis");
+  QStringList currentBrlcadObjects_;
+  rkcommon::math::vec3f boundsCenter_{0.f, 0.f, 0.f};
+  float boundsMaxExtent_ = 1.0f;
+  float lastFrameTimeMs_ = 0.0f;
+  float renderFps_ = 0.0f;
+  uint64_t accumulatedFrames_ = 0;
+  uint64_t watchdogCancelCount_ = 0;
+  uint64_t aoAutoReductionCount_ = 0;
+  int currentScale_ = 1;
+  bool dynamicModeActive_ = false;
+  bool backoffApplied_ = false;
+  OsprayBackend::SettingsMode settingsMode_ =
+      OsprayBackend::SettingsMode::Automatic;
+  OsprayBackend::AutomaticPreset automaticPreset_ =
+      OsprayBackend::AutomaticPreset::Balanced;
+  float automaticTargetFrameTimeMs_ = 16.0f;
+  bool automaticAccumulationEnabled_ = true;
+  int customStartScale_ = 8;
+  float customTargetFrameTimeMs_ = 16.0f;
+  int customAoSamples_ = 1;
+  int customPixelSamples_ = 1;
+  bool customAccumulationEnabled_ = true;
+  int customMaxAccumulationFrames_ = 0;
+  bool customLowQualityWhileInteracting_ = true;
+  bool customFullResAccumulationOnly_ = true;
+  int customWatchdogTimeoutMs_ = 1500;
+  GLuint displayTexture_ = 0;
+  bool textureDirty_ = false;
 
   InputMode inputMode_ = InputMode::Orbit;
   UpAxis upAxis_ = UpAxis::Z;
@@ -140,5 +207,4 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   bool imguiHasFocus_ = false;
   QString currentBrlcadPath_;
   QString currentBrlcadObject_;
-  QStringList currentBrlcadObjects_;
 };
