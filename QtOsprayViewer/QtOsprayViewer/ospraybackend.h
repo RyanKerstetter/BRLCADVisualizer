@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <array>
 #include <chrono>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -108,6 +109,14 @@ class OsprayBackend
   float renderFPS() const;
 
  private:
+  struct PendingCameraState
+  {
+    rkcommon::math::vec3f eye{0.f, 0.f, 1.f};
+    rkcommon::math::vec3f center{0.f, 0.f, 0.f};
+    rkcommon::math::vec3f up{0.f, 1.f, 0.f};
+    float fovyDeg = 60.f;
+  };
+
   enum class RenderPhase
   {
     Progressive,
@@ -125,6 +134,7 @@ class OsprayBackend
   void prepareTileFrameBuffer(int tileW, int tileH);
   void upsamplePassToDisplay();
   void applyAoBackoff(bool forcedByWatchdog);
+  void applyPendingState();
 
   int fbW_ = 1;
   int fbH_ = 1;
@@ -175,6 +185,12 @@ class OsprayBackend
   bool isInteracting_ = false;
   int aoBackoffSteps_ = 0;
   int progressiveFramesAtCurrentScale_ = 0;
+  std::optional<PendingCameraState> pendingCameraState_;
+  std::optional<std::string> pendingRendererType_;
+  bool pendingResetAccumulation_ = false;
+  int pendingResizeW_ = 1;
+  int pendingResizeH_ = 1;
+  bool pendingResize_ = false;
 
   SettingsMode settingsMode_ = SettingsMode::Automatic;
   AutomaticPreset automaticPreset_ = AutomaticPreset::Balanced;

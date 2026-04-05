@@ -4,6 +4,7 @@
 
 class RenderWidget;
 class QAction;
+class RenderWorkerClient;
 
 class MainWindow : public QMainWindow
 {
@@ -13,6 +14,7 @@ class MainWindow : public QMainWindow
 
  private:
   RenderWidget *renderWidget_ = nullptr;
+  RenderWorkerClient *renderWorkerClient_ = nullptr;
   QAction *selectBrlcadObjectAction_ = nullptr;
   void setupMenus();
   void updateBrlcadMenuState();

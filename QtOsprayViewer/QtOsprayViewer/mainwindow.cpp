@@ -1,23 +1,75 @@
 #include "mainwindow.h"
 #include "renderwidget.h"
+#include "renderworkerclient.h"
 
 #include <algorithm>
 #include <QAction>
 #include <QActionGroup>
+#include <QCoreApplication>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QInputDialog>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QTimer>
+#include <QStatusBar>
 
 #include <QLabel>
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
   renderWidget_ = new RenderWidget(this);
+  renderWorkerClient_ = new RenderWorkerClient(this);
+  renderWidget_->setRenderWorkerClient(renderWorkerClient_);
   setCentralWidget(renderWidget_);
   resize(1200, 800);
   setWindowTitle("Interactive BRLCAD Ray Tracing - IBRT");
+
+  connect(renderWidget_,
+      &RenderWidget::sceneLoadFinished,
+      this,
+      [this](bool success, const QString &errorMessage) {
+        if (!success) {
+          QMessageBox::warning(this,
+              "Load Failed",
+              errorMessage.isEmpty() ? "Scene load failed." : errorMessage);
+        }
+        updateBrlcadMenuState();
+      });
+
+  connect(renderWorkerClient_,
+      &RenderWorkerClient::workerConnectionChanged,
+      this,
+      [this](bool connected) {
+        if (connected) {
+          statusBar()->showMessage(QStringLiteral("Render worker connected."));
+          renderWidget_->replayWorkerState();
+          return;
+        }
+
+        statusBar()->showMessage(QStringLiteral("Render worker disconnected. Restarting..."));
+        QTimer::singleShot(500, this, [this]() {
+          if (renderWorkerClient_->isConnected())
+            return;
+          if (renderWorkerClient_->restart()) {
+            statusBar()->showMessage(QStringLiteral("Render worker reconnected."));
+            renderWidget_->replayWorkerState();
+          } else {
+            statusBar()->showMessage(
+                QStringLiteral("Render worker restart failed: %1")
+                    .arg(renderWorkerClient_->lastError()));
+          }
+        });
+      });
+
+  const QString workerPath =
+      QCoreApplication::applicationDirPath() + QStringLiteral("/IBRTRenderWorker.exe");
+  if (!renderWorkerClient_->start(workerPath)) {
+    statusBar()->showMessage(
+        QStringLiteral("Render worker unavailable: %1").arg(renderWorkerClient_->lastError()));
+  } else {
+    statusBar()->showMessage(QStringLiteral("Render worker connected."));
+  }
 
   setupMenus();
 }
@@ -88,13 +140,11 @@ void MainWindow::setupMenus()
             "Load Failed",
             detail.isEmpty() ? "Could not load OBJ file." : detail);
       }
-      updateBrlcadMenuState();
       return;
     }
 
     if (ext == "g") {
       chooseAndLoadBrlcadObject(path, renderWidget_->listBrlcadObjects(path));
-      updateBrlcadMenuState();
       return;
     }
 
@@ -187,5 +237,4 @@ void MainWindow::chooseAndLoadBrlcadObject(
               "Check that the object name exists in the database."
             : detail);
   }
-  updateBrlcadMenuState();
 }

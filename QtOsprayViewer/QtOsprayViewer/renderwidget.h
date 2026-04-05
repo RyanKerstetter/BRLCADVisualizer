@@ -7,18 +7,19 @@
 #include <QOpenGLFunctions>
 #include <QOpenGLWidget>
 #include <QPoint>
-#include <QSize>
 #include <QString>
+#include <QTimer>
 #include <QWheelEvent>
 
+#include <atomic>
+#include <functional>
+#include <thread>
+
 #include <ospray/ospray_cpp/ext/rkcommon.h>
+#include "renderworkerclient.h"
 #include "imgui.h"
 #include "ospraybackend.h"
 #include "interactioncontroller.h"
-
-class QThread;
-class QTimer;
-class RenderBackendWorker;
 
 class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
 {
@@ -60,10 +61,15 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   QString currentBrlcadObject() const;
   QStringList currentBrlcadObjects() const;
   bool hasBrlcadScene() const;
+  void setRenderWorkerClient(RenderWorkerClient *client);
+  void replayWorkerState();
 
   void setObjectTransform(const rkcommon::math::affine3f &xfm);
   rkcommon::math::affine3f objectTransform() const;
   rkcommon::math::affine3f objectTransform_{rkcommon::math::one};
+
+ signals:
+  void sceneLoadFinished(bool success, const QString &errorMessage);
 
   
 
@@ -98,8 +104,13 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   void rotateOrbit(float yawDelta, float pitchDelta);
   float flyMoveFactor_ = 0.005f;
   void syncCameraToBackend();
+  bool usingWorkerRenderPath() const;
+  void resetAccumulationTargets();
+  rkcommon::math::vec3f sceneBoundsCenter() const;
+  float sceneBoundsMaxExtent() const;
   void renderOnce();
   void advanceRender();
+  void startAsyncLoad(const std::function<void()> &loader, const QString &statusText);
 
   static float clampf(float v, float lo, float hi);
   static rkcommon::math::vec3f normalizeVec(const rkcommon::math::vec3f &v);
@@ -108,76 +119,13 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
 
   void applyViewAction(const InteractionController::Result &result, const QPoint &delta);
   void applyObjectAction(const InteractionController::Result &result, const QPoint &delta);
-  void queueCameraUpdate(bool resetAccumulation);
-  void flushQueuedCameraUpdate();
-  void queueInteracting(bool interacting);
-  void applyBackendSnapshot(const QString &lastError,
-      const QString &currentRenderer,
-      const rkcommon::math::vec3f &boundsCenter,
-      float boundsMaxExtent,
-      float lastFrameTimeMs,
-      float renderFps,
-      uint64_t accumulatedFrames,
-      uint64_t watchdogCancelCount,
-      uint64_t aoAutoReductionCount,
-      int currentScale,
-      bool dynamicModeActive,
-      bool backoffApplied,
-      OsprayBackend::SettingsMode settingsMode,
-      OsprayBackend::AutomaticPreset automaticPreset,
-      float automaticTargetFrameTimeMs,
-      bool automaticAccumulationEnabled,
-      int customStartScale,
-      float customTargetFrameTimeMs,
-      int customAoSamples,
-      int customPixelSamples,
-      bool customAccumulationEnabled,
-      int customMaxAccumulationFrames,
-      bool customLowQualityWhileInteracting,
-      bool customFullResAccumulationOnly,
-      int customWatchdogTimeoutMs);
-  void applyBackendImage(const QImage &image);
 
+  OsprayBackend backend_;
   QImage image_;
-  QSize imageSize_;
-  QSize textureSize_;
   QPoint lastMouse_;
+  QTimer *renderTimer_ = nullptr;
   bool backendReady_ = false;
-  QThread *backendThread_ = nullptr;
-  RenderBackendWorker *backendWorker_ = nullptr;
-  QTimer *cameraUpdateTimer_ = nullptr;
-  bool pendingCameraReset_ = false;
-  bool interactionActive_ = false;
-  QString lastError_;
-  QString currentRenderer_ = QStringLiteral("scivis");
-  QStringList currentBrlcadObjects_;
-  rkcommon::math::vec3f boundsCenter_{0.f, 0.f, 0.f};
-  float boundsMaxExtent_ = 1.0f;
-  float lastFrameTimeMs_ = 0.0f;
-  float renderFps_ = 0.0f;
-  uint64_t accumulatedFrames_ = 0;
-  uint64_t watchdogCancelCount_ = 0;
-  uint64_t aoAutoReductionCount_ = 0;
-  int currentScale_ = 1;
-  bool dynamicModeActive_ = false;
-  bool backoffApplied_ = false;
-  OsprayBackend::SettingsMode settingsMode_ =
-      OsprayBackend::SettingsMode::Automatic;
-  OsprayBackend::AutomaticPreset automaticPreset_ =
-      OsprayBackend::AutomaticPreset::Balanced;
-  float automaticTargetFrameTimeMs_ = 16.0f;
-  bool automaticAccumulationEnabled_ = true;
-  int customStartScale_ = 8;
-  float customTargetFrameTimeMs_ = 16.0f;
-  int customAoSamples_ = 1;
-  int customPixelSamples_ = 1;
-  bool customAccumulationEnabled_ = true;
-  int customMaxAccumulationFrames_ = 0;
-  bool customLowQualityWhileInteracting_ = true;
-  bool customFullResAccumulationOnly_ = true;
-  int customWatchdogTimeoutMs_ = 1500;
-  GLuint displayTexture_ = 0;
-  bool textureDirty_ = false;
+  int renderBudgetMs_ = 6;
 
   InputMode inputMode_ = InputMode::Orbit;
   UpAxis upAxis_ = UpAxis::Z;
@@ -207,4 +155,21 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   bool imguiHasFocus_ = false;
   QString currentBrlcadPath_;
   QString currentBrlcadObject_;
+  QStringList currentBrlcadObjects_;
+  QString currentModelPath_;
+  bool currentSceneIsObj_ = false;
+  QString currentRenderer_ = QStringLiteral("scivis");
+  RenderWorkerClient::RenderSettingsState workerSettings_;
+  rkcommon::math::vec3f sceneBoundsMin_{-1.f, -1.f, -1.f};
+  rkcommon::math::vec3f sceneBoundsMax_{1.f, 1.f, 1.f};
+  QString lastError_;
+  QString loadStatusText_;
+  float workerLastFrameTimeMs_ = 0.0f;
+  float workerRenderFPS_ = 0.0f;
+  uint64_t workerAccumulatedFrames_ = 0;
+  uint64_t workerWatchdogCancels_ = 0;
+  uint64_t workerAoAutoReductions_ = 0;
+  std::atomic<bool> sceneLoadInProgress_{false};
+  std::thread sceneLoadThread_;
+  RenderWorkerClient *renderWorkerClient_ = nullptr;
 };

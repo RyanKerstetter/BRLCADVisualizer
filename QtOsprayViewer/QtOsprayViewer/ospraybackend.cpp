@@ -64,7 +64,7 @@ void OsprayBackend::init()
     currentRenderer_ = "scivis";
     renderer_.setParam("aoSamples", configuredAoSamplesForCurrentMode());
     renderer_.setParam("pixelSamples", configuredPixelSamplesForCurrentMode());
-    renderer_.setParam("backgroundColor", vec3f(0.0f, 0.0f, 0.0f));
+    renderer_.setParam("backgroundColor", 1.0f);
     renderer_.commit();
     appliedAoSamples_ = configuredAoSamplesForCurrentMode();
     appliedPixelSamples_ = configuredPixelSamplesForCurrentMode();
@@ -85,8 +85,12 @@ void OsprayBackend::init()
 
 void OsprayBackend::resize(int w, int h)
 {
-  if (frameInFlight_)
-    cancelInFlightFrame();
+  if (frameInFlight_) {
+    pendingResizeW_ = std::max(1, w);
+    pendingResizeH_ = std::max(1, h);
+    pendingResize_ = true;
+    return;
+  }
 
   fbW_ = std::max(1, w);
   fbH_ = std::max(1, h);
@@ -103,8 +107,10 @@ void OsprayBackend::resize(int w, int h)
 
 void OsprayBackend::setCamera(const vec3f &eye, const vec3f &center, const vec3f &up, float fovyDeg)
 {
-  if (frameInFlight_)
-    cancelInFlightFrame();
+  if (frameInFlight_) {
+    pendingCameraState_ = PendingCameraState{eye, center, up, fovyDeg};
+    return;
+  }
 
   camera_.setParam("position", eye);
   camera_.setParam("direction", center - eye);
@@ -115,8 +121,10 @@ void OsprayBackend::setCamera(const vec3f &eye, const vec3f &center, const vec3f
 
 void OsprayBackend::resetAccumulation()
 {
-  if (frameInFlight_)
-    cancelInFlightFrame();
+  if (frameInFlight_) {
+    pendingResetAccumulation_ = true;
+    return;
+  }
 
   resetProgressiveState(false);
 }
@@ -131,50 +139,39 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
   try {
     (void)timeBudgetMs;
 
+    if (frameInFlight_) {
+      if (!currentFrame_.handle()) {
+        frameInFlight_ = false;
+        inFlightStartValid_ = false;
+        return false;
+      }
+
+      if (!currentFrame_.isReady(OSP_FRAME_FINISHED))
+        return false;
+
+      const bool updatedImage = finishCompletedRender();
+      applyPendingState();
+      return updatedImage;
+    }
+
     if (!renderer_.handle() || !camera_.handle() || !world_.handle()
         || fbW_ <= 0 || fbH_ <= 0
         || displayPixels_.empty()) {
       return false;
     }
 
+    applyPendingState();
+
     const bool accumulationEnabled = accumulationEnabledForCurrentMode();
     const int maxAccumulationFrames = maxAccumulationFramesForCurrentMode();
     const bool fullResAccumOnly = fullResAccumulationOnlyForCurrentMode();
     const bool lowQualityOnInteract = lowQualityWhileInteractingForCurrentMode();
-    const int watchdogTimeoutMs = watchdogTimeoutForCurrentMode();
     const int configuredAo = configuredAoSamplesForCurrentMode();
     const int configuredPixel = configuredPixelSamplesForCurrentMode();
     const int interactionAo = (isInteracting_ && lowQualityOnInteract) ? 0 : configuredAo;
     const int interactionPixel =
         (isInteracting_ && lowQualityOnInteract) ? 1 : configuredPixel;
     dynamicModeActive_ = (settingsMode_ == SettingsMode::Automatic);
-
-    if (frameInFlight_) {
-      const bool frameReady = currentFrame_.handle()
-          && currentFrame_.isReady(OSP_FRAME_FINISHED);
-      if (frameReady)
-        return finishCompletedRender();
-
-      if (inFlightStartValid_) {
-        const auto now = std::chrono::steady_clock::now();
-        const auto elapsedMs =
-            std::chrono::duration<float, std::milli>(now - inFlightStart_).count();
-        if (elapsedMs >= float(watchdogTimeoutMs)) {
-          watchdogTriggered_ = true;
-          ++watchdogCancelCount_;
-          cancelInFlightFrame();
-          applyAoBackoff(true);
-        }
-      }
-      return false;
-    }
-
-    if (cameraDirty_) {
-      updateCameraCrop(vec2f(0.f, 0.f), vec2f(1.f, 1.f));
-      camera_.commit();
-      cameraDirty_ = false;
-    }
-
     const int backoffAo = std::max(0, interactionAo - aoBackoffSteps_);
     const int effectiveAoSamples = (passScale_ > 1) ? 0 : backoffAo;
     const int effectivePixelSamples =
@@ -182,17 +179,17 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
     applyRendererSamplingParams(effectiveAoSamples, effectivePixelSamples);
 
     if (passScale_ <= 1 && accumFb_.handle() && accumulationEnabled) {
-      renderPhase_ = RenderPhase::Accumulate;
       if (maxAccumulationFrames > 0
-          && accumulatedFrames_ >= uint64_t(maxAccumulationFrames))
+          && accumulatedFrames_ >= uint64_t(maxAccumulationFrames)) {
         return false;
+      }
+      renderPhase_ = RenderPhase::Accumulate;
     } else {
       renderPhase_ = RenderPhase::Progressive;
     }
 
-    if (!startNextRenderWork())
-      return false;
-    watchdogTriggered_ = false;
+    assert(!frameInFlight_);
+    startNextRenderWork();
     return false;
   } catch (const std::exception &e) {
     frameInFlight_ = false;
@@ -317,8 +314,9 @@ void OsprayBackend::loadTestMesh()
 
 bool OsprayBackend::loadObj(const std::string &path)
 {
-  if (frameInFlight_)
+  if (frameInFlight_) {
     cancelInFlightFrame();
+  }
 
   lastError_.clear();
   try {
@@ -443,8 +441,9 @@ bool OsprayBackend::loadObj(const std::string &path)
 bool OsprayBackend::loadBrlcad(
     const std::string &path, const std::string &topObject)
 {
-  if (frameInFlight_)
+  if (frameInFlight_) {
     cancelInFlightFrame();
+  }
 
   lastError_.clear();
   try {
@@ -569,14 +568,17 @@ bool OsprayBackend::loadBrlcad(
 
 void OsprayBackend::setRenderer(const std::string &type)
 {
-  if (frameInFlight_)
-    cancelInFlightFrame();
+  if (frameInFlight_) {
+    pendingRendererType_ = type;
+    pendingResetAccumulation_ = true;
+    return;
+  }
 
   try {
     renderer_ = ospray::cpp::Renderer(type);
     currentRenderer_ = type;
 
-    renderer_.setParam("backgroundColor", vec3f(0.0f, 0.0f, 0.0f));
+    renderer_.setParam("backgroundColor", 1.0f);
     renderer_.setParam("pixelSamples", configuredPixelSamplesForCurrentMode());
     renderer_.setParam("aoSamples", configuredAoSamplesForCurrentMode());
     renderer_.commit();
@@ -598,8 +600,10 @@ const std::string &OsprayBackend::currentRenderer() const
 
 void OsprayBackend::setAoSamples(int samples)
 {
-  if (frameInFlight_)
-    cancelInFlightFrame();
+  if (frameInFlight_) {
+    setError("AO sample update ignored while render is in flight.");
+    return;
+  }
 
   const int clamped = std::clamp(samples, 0, kMaxSafeAoSamples);
   if (customAoSamples_ == clamped)
@@ -611,8 +615,10 @@ void OsprayBackend::setAoSamples(int samples)
 
 void OsprayBackend::setPixelSamples(int samples)
 {
-  if (frameInFlight_)
-    cancelInFlightFrame();
+  if (frameInFlight_) {
+    setError("Pixel sample update ignored while render is in flight.");
+    return;
+  }
 
   const int clamped = std::clamp(samples, 1, kMaxSafePixelSamples);
   if (customPixelSamples_ == clamped)
@@ -784,16 +790,8 @@ void OsprayBackend::setInteracting(bool interacting)
 {
   if (isInteracting_ == interacting)
     return;
-
   isInteracting_ = interacting;
-  if (isInteracting_) {
-    interactionRecoveryDeadline_ = std::chrono::steady_clock::time_point::max();
-    resetAccumulation();
-  } else {
-    interactionRecoveryDeadline_ =
-        std::chrono::steady_clock::now()
-        + std::chrono::milliseconds(kInteractionRecoveryMs);
-  }
+  resetAccumulation();
 }
 
 int OsprayBackend::currentScale() const
@@ -865,22 +863,6 @@ int OsprayBackend::startScaleForCurrentMode() const
   return 8;
 }
 
-int OsprayBackend::interactionStartScaleForCurrentMode() const
-{
-  if (settingsMode_ == SettingsMode::Custom)
-    return std::max(2, std::min(customStartScale_, 4));
-
-  switch (automaticPreset_) {
-  case AutomaticPreset::Fast:
-    return 8;
-  case AutomaticPreset::Balanced:
-    return 4;
-  case AutomaticPreset::Quality:
-    return 2;
-  }
-  return 4;
-}
-
 float OsprayBackend::targetFrameTimeForCurrentMode() const
 {
   return (settingsMode_ == SettingsMode::Custom) ? customTargetFrameTimeMs_
@@ -949,18 +931,11 @@ bool OsprayBackend::lowQualityWhileInteractingForCurrentMode() const
       : true;
 }
 
-bool OsprayBackend::interactionRecoveryActive() const
-{
-  if (isInteracting_)
-    return true;
-  return std::chrono::steady_clock::now() < interactionRecoveryDeadline_;
-}
-
 void OsprayBackend::cancelInFlightFrame()
 {
-  if (frameInFlight_ && currentFrame_.handle()) {
-    currentFrame_.cancel();
-    currentFrame_.wait(OSP_TASK_FINISHED);
+  if (frameInFlight_) {
+    if (currentFrame_.handle())
+      currentFrame_.cancel();
   }
 
   frameInFlight_ = false;
@@ -971,10 +946,7 @@ void OsprayBackend::cancelInFlightFrame()
 void OsprayBackend::resetProgressiveState(bool clearDisplay)
 {
   renderPhase_ = RenderPhase::Progressive;
-  int startScale = startScaleForCurrentMode();
-  if (interactionRecoveryActive())
-    startScale = std::max(startScale, interactionStartScaleForCurrentMode());
-  currentScaleIndex_ = scaleToIndex(startScale);
+  currentScaleIndex_ = scaleToIndex(startScaleForCurrentMode());
   slowPassStreak_ = 0;
   passScale_ = kProgressiveScales[currentScaleIndex_];
   const int targetW = std::max(1, (fbW_ + passScale_ - 1) / passScale_);
@@ -1067,6 +1039,10 @@ bool OsprayBackend::finishCompletedRender()
 
   currentFrame_.wait(OSP_FRAME_FINISHED);
   lastFrameTimeMs_ = currentFrame_.duration() * 1000.0f;
+  watchdogTriggered_ =
+      (lastFrameTimeMs_ >= float(watchdogTimeoutForCurrentMode()));
+  if (watchdogTriggered_)
+    ++watchdogCancelCount_;
 
   bool updatedImage = false;
 
@@ -1080,16 +1056,7 @@ bool OsprayBackend::finishCompletedRender()
     upsamplePassToDisplay();
     ++accumulatedFrames_;
     updatedImage = true;
-    const bool accumulationEnabled = accumulationEnabledForCurrentMode();
-    const bool fullResAccumOnly = fullResAccumulationOnlyForCurrentMode();
-    ++progressiveFramesAtCurrentScale_;
-    const int framesPerScale =
-        (accumulationEnabled && !fullResAccumOnly) ? 2 : 1;
-    if (progressiveFramesAtCurrentScale_ >= framesPerScale
-        && !interactionRecoveryActive()) {
-      progressiveFramesAtCurrentScale_ = 0;
-      beginNextProgressivePass();
-    }
+    beginNextProgressivePass();
   } else {
     void *mapped = accumFb_.map(OSP_FB_COLOR);
     std::memcpy(displayPixels_.data(),
@@ -1103,12 +1070,54 @@ bool OsprayBackend::finishCompletedRender()
   frameInFlight_ = false;
   inFlightStartValid_ = false;
   currentFrame_ = ospray::cpp::Future();
-  watchdogTriggered_ =
-      (lastFrameTimeMs_ >= float(watchdogTimeoutForCurrentMode()));
-  if (watchdogTriggered_)
-    ++watchdogCancelCount_;
   applyAoBackoff(watchdogTriggered_);
   return updatedImage;
+}
+
+void OsprayBackend::applyPendingState()
+{
+  if (frameInFlight_)
+    return;
+
+  if (pendingResize_) {
+    fbW_ = std::max(1, pendingResizeW_);
+    fbH_ = std::max(1, pendingResizeH_);
+    camera_.setParam("aspect", float(fbW_) / float(fbH_));
+    cameraDirty_ = true;
+    accumFb_ = ospray::cpp::FrameBuffer(
+        fbW_, fbH_, OSP_FB_SRGBA, OSP_FB_COLOR | OSP_FB_ACCUM);
+    displayPixels_.assign(size_t(fbW_) * size_t(fbH_), 0u);
+    resetProgressiveState(true);
+    pendingResize_ = false;
+  }
+
+  if (pendingRendererType_) {
+    renderer_ = ospray::cpp::Renderer(*pendingRendererType_);
+    currentRenderer_ = *pendingRendererType_;
+    renderer_.setParam("backgroundColor", 1.0f);
+    renderer_.setParam("pixelSamples", configuredPixelSamplesForCurrentMode());
+    renderer_.setParam("aoSamples", configuredAoSamplesForCurrentMode());
+    renderer_.commit();
+    appliedAoSamples_ = configuredAoSamplesForCurrentMode();
+    appliedPixelSamples_ = configuredPixelSamplesForCurrentMode();
+    pendingRendererType_.reset();
+    pendingResetAccumulation_ = true;
+  }
+
+  if (pendingCameraState_) {
+    camera_.setParam("position", pendingCameraState_->eye);
+    camera_.setParam("direction", pendingCameraState_->center - pendingCameraState_->eye);
+    camera_.setParam("up", pendingCameraState_->up);
+    camera_.setParam("fovy", pendingCameraState_->fovyDeg);
+    cameraDirty_ = true;
+    pendingCameraState_.reset();
+    pendingResetAccumulation_ = true;
+  }
+
+  if (pendingResetAccumulation_) {
+    resetProgressiveState(false);
+    pendingResetAccumulation_ = false;
+  }
 }
 
 void OsprayBackend::upsamplePassToDisplay()
