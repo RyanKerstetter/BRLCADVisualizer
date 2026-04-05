@@ -11,7 +11,12 @@
 #include <QTimer>
 #include <QWheelEvent>
 
+#include <atomic>
+#include <functional>
+#include <thread>
+
 #include <ospray/ospray_cpp/ext/rkcommon.h>
+#include "renderworkerclient.h"
 #include "imgui.h"
 #include "ospraybackend.h"
 #include "interactioncontroller.h"
@@ -56,10 +61,15 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   QString currentBrlcadObject() const;
   QStringList currentBrlcadObjects() const;
   bool hasBrlcadScene() const;
+  void setRenderWorkerClient(RenderWorkerClient *client);
+  void replayWorkerState();
 
   void setObjectTransform(const rkcommon::math::affine3f &xfm);
   rkcommon::math::affine3f objectTransform() const;
   rkcommon::math::affine3f objectTransform_{rkcommon::math::one};
+
+ signals:
+  void sceneLoadFinished(bool success, const QString &errorMessage);
 
   
 
@@ -94,8 +104,13 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   void rotateOrbit(float yawDelta, float pitchDelta);
   float flyMoveFactor_ = 0.005f;
   void syncCameraToBackend();
+  bool usingWorkerRenderPath() const;
+  void resetAccumulationTargets();
+  rkcommon::math::vec3f sceneBoundsCenter() const;
+  float sceneBoundsMaxExtent() const;
   void renderOnce();
   void advanceRender();
+  void startAsyncLoad(const std::function<void()> &loader, const QString &statusText);
 
   static float clampf(float v, float lo, float hi);
   static rkcommon::math::vec3f normalizeVec(const rkcommon::math::vec3f &v);
@@ -141,4 +156,20 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   QString currentBrlcadPath_;
   QString currentBrlcadObject_;
   QStringList currentBrlcadObjects_;
+  QString currentModelPath_;
+  bool currentSceneIsObj_ = false;
+  QString currentRenderer_ = QStringLiteral("scivis");
+  RenderWorkerClient::RenderSettingsState workerSettings_;
+  rkcommon::math::vec3f sceneBoundsMin_{-1.f, -1.f, -1.f};
+  rkcommon::math::vec3f sceneBoundsMax_{1.f, 1.f, 1.f};
+  QString lastError_;
+  QString loadStatusText_;
+  float workerLastFrameTimeMs_ = 0.0f;
+  float workerRenderFPS_ = 0.0f;
+  uint64_t workerAccumulatedFrames_ = 0;
+  uint64_t workerWatchdogCancels_ = 0;
+  uint64_t workerAoAutoReductions_ = 0;
+  std::atomic<bool> sceneLoadInProgress_{false};
+  std::thread sceneLoadThread_;
+  RenderWorkerClient *renderWorkerClient_ = nullptr;
 };

@@ -77,12 +77,24 @@ qt_add_executable(QtOsprayViewer
     main.cpp
     mainwindow.cpp
     mainwindow.h
+    renderworkerclient.cpp
+    renderworkerclient.h
     renderwidget.cpp
     renderwidget.h
     ospraybackend.cpp
     ospraybackend.h
     interactioncontroller.cpp
     interactioncontroller.h
+    worker_ipc.cpp
+    worker_ipc.h
+)
+
+add_executable(IBRTRenderWorker
+    worker_main.cpp
+    ospraybackend.cpp
+    ospraybackend.h
+    worker_ipc.cpp
+    worker_ipc.h
 )
 
 set_target_properties(QtOsprayViewer PROPERTIES
@@ -109,6 +121,16 @@ target_include_directories(QtOsprayViewer PRIVATE
     $<$<BOOL:${WIN32}>:${TBB_ROOT}/include>
 )
 
+target_include_directories(IBRTRenderWorker PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${OSPRAY_PREFIX}/include"
+    "${RKCOMMON_PREFIX}/include"
+    "${BRLCAD_INCLUDE_DIR}"
+    "${BRLCAD_INCLUDE_DIR}/brlcad"
+    "${BRLCAD_INCLUDE_DIR}/OpenNURBS"
+    $<$<BOOL:${WIN32}>:${TBB_ROOT}/include>
+)
+
 target_link_libraries(QtOsprayViewer PRIVATE
     Qt6::Widgets
     Qt6::OpenGLWidgets
@@ -120,7 +142,70 @@ target_link_libraries(QtOsprayViewer PRIVATE
     $<$<BOOL:${WIN32}>:dbghelp>
 )
 
+target_link_libraries(IBRTRenderWorker PRIVATE
+    ospray::ospray
+    ${BRLCAD_RT_LIBRARY}
+    ${BRLCAD_BU_LIBRARY}
+    $<$<BOOL:${WIN32}>:TBB::tbb>
+)
+
 if(WIN32)
+    add_custom_command(TARGET IBRTRenderWorker POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${OSPRAY_PREFIX}/bin"
+            "$<TARGET_FILE_DIR:IBRTRenderWorker>"
+        COMMENT "Copying OSPRay runtime DLLs for worker...")
+
+    add_custom_command(TARGET IBRTRenderWorker POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${RKCOMMON_PREFIX}/bin"
+            "$<TARGET_FILE_DIR:IBRTRenderWorker>"
+        COMMENT "Copying rkcommon runtime DLLs for worker...")
+
+    add_custom_command(TARGET IBRTRenderWorker POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${EMBREE_PREFIX}/bin"
+            "$<TARGET_FILE_DIR:IBRTRenderWorker>"
+        COMMENT "Copying Embree runtime DLLs for worker...")
+
+    add_custom_command(TARGET IBRTRenderWorker POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${OPENVKL_PREFIX}/bin"
+            "$<TARGET_FILE_DIR:IBRTRenderWorker>"
+        COMMENT "Copying OpenVKL runtime DLLs for worker...")
+
+    add_custom_command(TARGET IBRTRenderWorker POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${BRLCAD_PREFIX}/bin"
+            "$<TARGET_FILE_DIR:IBRTRenderWorker>"
+        COMMENT "Copying BRL-CAD runtime DLLs for worker...")
+
+    if(BRLCAD_OSPRAY_MODULE_DLL AND EXISTS "${BRLCAD_OSPRAY_MODULE_DLL}")
+        add_custom_command(TARGET IBRTRenderWorker POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${BRLCAD_OSPRAY_MODULE_DLL}"
+                "$<TARGET_FILE_DIR:IBRTRenderWorker>/ospray_module_brl_cad.dll"
+            COMMENT "Deploying ospray_module_brl_cad.dll for worker...")
+    endif()
+
+    add_custom_command(TARGET IBRTRenderWorker POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${RKCOMMON_PREFIX}/bin/rkcommon.dll"
+            "$<TARGET_FILE_DIR:IBRTRenderWorker>/rkcommon.dll"
+        COMMENT "Restoring correct rkcommon.dll for worker...")
+    add_custom_command(TARGET IBRTRenderWorker POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${EMBREE_PREFIX}/bin/embree4.dll"
+            "$<TARGET_FILE_DIR:IBRTRenderWorker>/embree4.dll"
+        COMMENT "Restoring correct embree4.dll for worker...")
+
+    add_custom_command(TARGET IBRTRenderWorker POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:IBRTRenderWorker>/vcruntime140.dll"
+            "$<TARGET_FILE_DIR:IBRTRenderWorker>/vcruntime140_1.dll"
+            "$<TARGET_FILE_DIR:IBRTRenderWorker>/msvcp140.dll"
+        COMMENT "Removing bundled CRT DLLs for worker...")
+
     add_custom_command(TARGET QtOsprayViewer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${OSPRAY_PREFIX}/bin"
@@ -198,4 +283,11 @@ if(WIN32)
     add_custom_command(TARGET QtOsprayViewer POST_BUILD
         COMMAND "${WINDEPLOYQT}" "$<TARGET_FILE:QtOsprayViewer>"
         COMMENT "Running windeployqt...")
+
+    add_dependencies(QtOsprayViewer IBRTRenderWorker)
+    add_custom_command(TARGET QtOsprayViewer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:IBRTRenderWorker>"
+            "$<TARGET_FILE_DIR:QtOsprayViewer>/IBRTRenderWorker.exe"
+        COMMENT "Deploying render worker executable...")
 endif()

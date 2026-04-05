@@ -1,5 +1,8 @@
 #include "renderwidget.h"
 
+#include "renderworkerclient.h"
+
+#include <QMetaObject>
 #include <QPainter>
 #include <algorithm>
 #include <cmath>
@@ -25,6 +28,9 @@ RenderWidget::RenderWidget(QWidget *parent) : QOpenGLWidget(parent)
 
 RenderWidget::~RenderWidget()
 {
+  if (sceneLoadThread_.joinable())
+    sceneLoadThread_.join();
+
   makeCurrent();
   ImGui_ImplOpenGL3_Shutdown();
   ImGui::DestroyContext();
@@ -92,7 +98,7 @@ void RenderWidget::applyViewAction(
   else if (result.action == Action::Scale) {
     float amount = float(delta.y()) * 0.01f;
 
-    float maxExtent = backend_.getBoundsMaxExtent();
+    float maxExtent = sceneBoundsMaxExtent();
     if (maxExtent < 0.001f)
       maxExtent = 1.0f;
 
@@ -103,7 +109,7 @@ void RenderWidget::applyViewAction(
     dist_ = clampf(dist_, minDist, maxDist);
   }
 
-  backend_.resetAccumulation();
+  resetAccumulationTargets();
   syncCameraToBackend();
   renderOnce();
 }
@@ -185,6 +191,14 @@ void RenderWidget::initializeGL()
 
 void RenderWidget::resizeGL(int w, int h)
 {
+  if (sceneLoadInProgress_.load()) {
+    ImGui::GetIO().DisplaySize = ImVec2(float(w), float(h));
+    return;
+  }
+
+  if (usingWorkerRenderPath())
+    renderWorkerClient_->resize(w, h);
+
   backend_.resize(w, h);
   ImGui::GetIO().DisplaySize = ImVec2(float(w), float(h));
 
@@ -200,19 +214,79 @@ void RenderWidget::syncCameraToBackend()
         center_.z - dist_ * forward.z);
 
     backend_.setCamera(eye, center_, orbitUp_, fovy_);
+    if (usingWorkerRenderPath())
+      renderWorkerClient_->setCamera(eye, center_, orbitUp_, fovy_);
   } else {
     flyPitch_ = clampf(flyPitch_, -1.4f, 1.4f);
 
     vec3f forward = forwardFromAngles(flyYaw_, flyPitch_);
 
     backend_.setCamera(flyPos_, flyPos_ + forward, worldUp(), fovy_);
+    if (usingWorkerRenderPath())
+      renderWorkerClient_->setCamera(flyPos_, flyPos_ + forward, worldUp(), fovy_);
   }
+}
+
+bool RenderWidget::usingWorkerRenderPath() const
+{
+  return renderWorkerClient_ && renderWorkerClient_->isConnected();
+}
+
+void RenderWidget::resetAccumulationTargets()
+{
+  backend_.resetAccumulation();
+  if (usingWorkerRenderPath())
+    renderWorkerClient_->resetAccumulation();
+}
+
+vec3f RenderWidget::sceneBoundsCenter() const
+{
+  if (usingWorkerRenderPath()) {
+    return vec3f(0.5f * (sceneBoundsMin_.x + sceneBoundsMax_.x),
+        0.5f * (sceneBoundsMin_.y + sceneBoundsMax_.y),
+        0.5f * (sceneBoundsMin_.z + sceneBoundsMax_.z));
+  }
+  return backend_.getBoundsCenter();
+}
+
+float RenderWidget::sceneBoundsMaxExtent() const
+{
+  if (usingWorkerRenderPath()) {
+    const float dx = sceneBoundsMax_.x - sceneBoundsMin_.x;
+    const float dy = sceneBoundsMax_.y - sceneBoundsMin_.y;
+    const float dz = sceneBoundsMax_.z - sceneBoundsMin_.z;
+    return std::max(dx, std::max(dy, dz));
+  }
+  return backend_.getBoundsMaxExtent();
 }
 
 void RenderWidget::renderOnce()
 {
-  if (!backendReady_)
+  if (!backendReady_ || sceneLoadInProgress_.load())
     return;
+
+  if (usingWorkerRenderPath()) {
+    const auto frame = renderWorkerClient_->requestFrame();
+    if (frame.image.isNull())
+      return;
+
+    image_ = frame.image;
+    workerLastFrameTimeMs_ = frame.frameTimeMs;
+    workerRenderFPS_ = frame.renderFPS;
+    workerAccumulatedFrames_ = frame.accumulatedFrames;
+    workerWatchdogCancels_ = frame.watchdogCancels;
+    workerAoAutoReductions_ = frame.aoAutoReductions;
+    if (!frame.renderer.isEmpty())
+      currentRenderer_ = frame.renderer;
+    update();
+
+    const float frameMs = frame.frameTimeMs;
+    if (frameMs < 10.0f)
+      renderBudgetMs_ = std::min(10, renderBudgetMs_ + 1);
+    else if (frameMs > 22.0f)
+      renderBudgetMs_ = std::max(3, renderBudgetMs_ - 1);
+    return;
+  }
 
   const bool updatedImage = backend_.advanceRender(renderBudgetMs_);
   const uint32_t *px = backend_.pixels();
@@ -239,7 +313,7 @@ void RenderWidget::renderOnce()
 
 void RenderWidget::advanceRender()
 {
-  if (!backendReady_ || !isVisible())
+  if (!backendReady_ || !isVisible() || sceneLoadInProgress_.load())
     return;
 
   renderOnce();
@@ -284,20 +358,43 @@ void RenderWidget::paintGL()
   ImGui_ImplOpenGL3_NewFrame();
   ImGui::NewFrame();
 
-    ImGui::Begin("Viewer");
+  ImGui::Begin("Viewer");
+
+  if (sceneLoadInProgress_.load()) {
+    ImGui::Separator();
+    ImGui::Text("Status");
+    ImGui::TextWrapped("%s", loadStatusText_.toStdString().c_str());
+    ImGui::Text("Renderer work is paused until the scene load completes.");
+    ImGui::End();
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    return;
+  }
 
   ImGui::Separator();
   ImGui::Text("Stats");
 
   ImGui::Text("UI FPS: %.1f", ImGui::GetIO().Framerate);
-  ImGui::Text("Render time: %.2f ms", backend_.lastFrameTimeMs());
-  ImGui::Text("Render FPS: %.1f", backend_.renderFPS());
-  ImGui::Text("Accumulated frames: %llu",
-      static_cast<unsigned long long>(backend_.accumulatedFrames()));
-  ImGui::Text("Watchdog cancels: %llu",
-      static_cast<unsigned long long>(backend_.watchdogCancelCount()));
-  ImGui::Text("AO auto-reductions: %llu",
-      static_cast<unsigned long long>(backend_.aoAutoReductionCount()));
+  if (usingWorkerRenderPath()) {
+    ImGui::Text("Render path: Worker");
+    ImGui::Text("Render time: %.2f ms", workerLastFrameTimeMs_);
+    ImGui::Text("Render FPS: %.1f", workerRenderFPS_);
+    ImGui::Text("Accumulated frames: %llu",
+        static_cast<unsigned long long>(workerAccumulatedFrames_));
+    ImGui::Text("Watchdog cancels: %llu",
+        static_cast<unsigned long long>(workerWatchdogCancels_));
+    ImGui::Text("AO auto-reductions: %llu",
+        static_cast<unsigned long long>(workerAoAutoReductions_));
+  } else {
+    ImGui::Text("Render time: %.2f ms", backend_.lastFrameTimeMs());
+    ImGui::Text("Render FPS: %.1f", backend_.renderFPS());
+    ImGui::Text("Accumulated frames: %llu",
+        static_cast<unsigned long long>(backend_.accumulatedFrames()));
+    ImGui::Text("Watchdog cancels: %llu",
+        static_cast<unsigned long long>(backend_.watchdogCancelCount()));
+    ImGui::Text("AO auto-reductions: %llu",
+        static_cast<unsigned long long>(backend_.aoAutoReductionCount()));
+  }
   ImGui::Text("Up Axis: %s", upAxis_ == UpAxis::Z ? "Z" : "Y");
   ImGui::Text("Resolution: %d x %d", width(), height());
 
@@ -305,160 +402,238 @@ void RenderWidget::paintGL()
   ImGui::Text("Renderer");
 
   int rendererMode = 0;
-  if (backend_.currentRenderer() == "scivis")
+  const std::string rendererName =
+      usingWorkerRenderPath() ? currentRenderer_.toStdString() : backend_.currentRenderer();
+  if (rendererName == "scivis")
     rendererMode = 1;
-  else if (backend_.currentRenderer() == "pathtracer")
+  else if (rendererName == "pathtracer")
     rendererMode = 2;
   else
     rendererMode = 0;
 
   if (ImGui::RadioButton("ao", rendererMode == 0)) {
     rendererMode = 0;
-    backend_.setRenderer("ao");
-    backend_.resetAccumulation();
+    currentRenderer_ = QStringLiteral("ao");
+    if (usingWorkerRenderPath())
+      renderWorkerClient_->setRenderer(currentRenderer_);
+    else
+      backend_.setRenderer("ao");
+    resetAccumulationTargets();
     renderOnce();
     update();
   }
   if (ImGui::RadioButton("SciVis", rendererMode == 1)) {
     rendererMode = 1;
-    backend_.setRenderer("scivis");
-    backend_.resetAccumulation();
+    currentRenderer_ = QStringLiteral("scivis");
+    if (usingWorkerRenderPath())
+      renderWorkerClient_->setRenderer(currentRenderer_);
+    else
+      backend_.setRenderer("scivis");
+    resetAccumulationTargets();
     renderOnce();
     update();
   }
   if (ImGui::RadioButton("PathTracer", rendererMode == 2)) {
     rendererMode = 2;
-    backend_.setRenderer("pathtracer");
-    backend_.resetAccumulation();
+    currentRenderer_ = QStringLiteral("pathtracer");
+    if (usingWorkerRenderPath())
+      renderWorkerClient_->setRenderer(currentRenderer_);
+    else
+      backend_.setRenderer("pathtracer");
+    resetAccumulationTargets();
     renderOnce();
     update();
   }
 
   ImGui::Separator();
   ImGui::Text("Render Settings");
-
   bool settingsChanged = false;
-  int settingsMode = backend_.settingsMode() == OsprayBackend::SettingsMode::Automatic ? 0 : 1;
+  int settingsMode = usingWorkerRenderPath()
+      ? workerSettings_.settingsMode
+      : (backend_.settingsMode() == OsprayBackend::SettingsMode::Automatic ? 0 : 1);
   if (ImGui::RadioButton("Automatic", settingsMode == 0)) {
-    backend_.setSettingsMode(OsprayBackend::SettingsMode::Automatic);
+    if (usingWorkerRenderPath())
+      workerSettings_.settingsMode = 0;
+    else
+      backend_.setSettingsMode(OsprayBackend::SettingsMode::Automatic);
     settingsChanged = true;
   }
   ImGui::SameLine();
   if (ImGui::RadioButton("Custom", settingsMode == 1)) {
-    backend_.setSettingsMode(OsprayBackend::SettingsMode::Custom);
+    if (usingWorkerRenderPath())
+      workerSettings_.settingsMode = 1;
+    else
+      backend_.setSettingsMode(OsprayBackend::SettingsMode::Custom);
     settingsChanged = true;
   }
 
-  if (backend_.settingsMode() == OsprayBackend::SettingsMode::Automatic) {
+  if (settingsMode == 0) {
     ImGui::SeparatorText("Automatic");
 
-    int preset = 1;
-    if (backend_.automaticPreset() == OsprayBackend::AutomaticPreset::Fast)
-      preset = 0;
-    else if (backend_.automaticPreset() == OsprayBackend::AutomaticPreset::Balanced)
-      preset = 1;
-    else
-      preset = 2;
+    int preset = usingWorkerRenderPath() ? workerSettings_.automaticPreset : 1;
+    if (!usingWorkerRenderPath()) {
+      if (backend_.automaticPreset() == OsprayBackend::AutomaticPreset::Fast)
+        preset = 0;
+      else if (backend_.automaticPreset() == OsprayBackend::AutomaticPreset::Balanced)
+        preset = 1;
+      else
+        preset = 2;
+    }
     const char *presetLabels[] = {"Fast", "Balanced", "Quality"};
     if (ImGui::Combo("Preset", &preset, presetLabels, IM_ARRAYSIZE(presetLabels))) {
-      if (preset == 0)
-        backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Fast);
-      else if (preset == 1)
-        backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Balanced);
+      if (usingWorkerRenderPath())
+        workerSettings_.automaticPreset = preset;
       else
-        backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Quality);
+        if (preset == 0)
+          backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Fast);
+        else if (preset == 1)
+          backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Balanced);
+        else
+          backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Quality);
       settingsChanged = true;
     }
 
-    float targetMs = backend_.automaticTargetFrameTimeMs();
+    float targetMs = usingWorkerRenderPath() ? workerSettings_.automaticTargetFrameTimeMs
+                                             : backend_.automaticTargetFrameTimeMs();
     if (ImGui::DragFloat("Target Frame Time (ms)", &targetMs, 0.1f, 2.0f, 1000.0f, "%.1f")) {
-      backend_.setAutomaticTargetFrameTimeMs(targetMs);
+      if (usingWorkerRenderPath())
+        workerSettings_.automaticTargetFrameTimeMs = targetMs;
+      else
+        backend_.setAutomaticTargetFrameTimeMs(targetMs);
       settingsChanged = true;
     }
 
-    bool accumEnabled = backend_.automaticAccumulationEnabled();
+    bool accumEnabled = usingWorkerRenderPath() ? workerSettings_.automaticAccumulationEnabled
+                                                : backend_.automaticAccumulationEnabled();
     if (ImGui::Checkbox("Accumulation", &accumEnabled)) {
-      backend_.setAutomaticAccumulationEnabled(accumEnabled);
+      if (usingWorkerRenderPath())
+        workerSettings_.automaticAccumulationEnabled = accumEnabled;
+      else
+        backend_.setAutomaticAccumulationEnabled(accumEnabled);
       settingsChanged = true;
     }
 
     if (ImGui::Button("Reset Render")) {
-      backend_.resetAccumulation();
+      resetAccumulationTargets();
       settingsChanged = true;
     }
   } else {
     ImGui::SeparatorText("Custom");
 
-    int startScale = backend_.customStartScale();
+    int startScale = usingWorkerRenderPath() ? workerSettings_.customStartScale
+                                             : backend_.customStartScale();
     if (ImGui::SliderInt("Start Scale", &startScale, 1, 16)) {
-      backend_.setCustomStartScale(startScale);
+      if (usingWorkerRenderPath())
+        workerSettings_.customStartScale = startScale;
+      else
+        backend_.setCustomStartScale(startScale);
       settingsChanged = true;
     }
 
-    float targetMs = backend_.customTargetFrameTimeMs();
+    float targetMs = usingWorkerRenderPath() ? workerSettings_.customTargetFrameTimeMs
+                                             : backend_.customTargetFrameTimeMs();
     if (ImGui::DragFloat("Target Frame Time (ms)", &targetMs, 0.1f, 2.0f, 1000.0f, "%.1f")) {
-      backend_.setCustomTargetFrameTimeMs(targetMs);
+      if (usingWorkerRenderPath())
+        workerSettings_.customTargetFrameTimeMs = targetMs;
+      else
+        backend_.setCustomTargetFrameTimeMs(targetMs);
       settingsChanged = true;
     }
 
-    int aoSamples = backend_.customAoSamples();
+    int aoSamples = usingWorkerRenderPath() ? workerSettings_.customAoSamples
+                                            : backend_.customAoSamples();
     if (ImGui::SliderInt("AO Samples", &aoSamples, 0, 32)) {
-      backend_.setAoSamples(aoSamples);
+      if (usingWorkerRenderPath())
+        workerSettings_.customAoSamples = aoSamples;
+      else
+        backend_.setAoSamples(aoSamples);
       settingsChanged = true;
     }
 
-    int pixelSamples = backend_.customPixelSamples();
+    int pixelSamples = usingWorkerRenderPath() ? workerSettings_.customPixelSamples
+                                               : backend_.customPixelSamples();
     if (ImGui::SliderInt("Pixel Samples", &pixelSamples, 1, 64)) {
-      backend_.setPixelSamples(pixelSamples);
+      if (usingWorkerRenderPath())
+        workerSettings_.customPixelSamples = pixelSamples;
+      else
+        backend_.setPixelSamples(pixelSamples);
       settingsChanged = true;
     }
 
-    bool accumEnabled = backend_.customAccumulationEnabled();
+    bool accumEnabled = usingWorkerRenderPath() ? workerSettings_.customAccumulationEnabled
+                                                : backend_.customAccumulationEnabled();
     if (ImGui::Checkbox("Accumulation Enabled", &accumEnabled)) {
-      backend_.setCustomAccumulationEnabled(accumEnabled);
+      if (usingWorkerRenderPath())
+        workerSettings_.customAccumulationEnabled = accumEnabled;
+      else
+        backend_.setCustomAccumulationEnabled(accumEnabled);
       settingsChanged = true;
     }
 
-    int maxAccumFrames = backend_.customMaxAccumulationFrames();
+    int maxAccumFrames = usingWorkerRenderPath() ? workerSettings_.customMaxAccumulationFrames
+                                                 : backend_.customMaxAccumulationFrames();
     if (ImGui::InputInt("Max Accumulation Frames", &maxAccumFrames)) {
-      backend_.setCustomMaxAccumulationFrames(maxAccumFrames);
+      if (usingWorkerRenderPath())
+        workerSettings_.customMaxAccumulationFrames = maxAccumFrames;
+      else
+        backend_.setCustomMaxAccumulationFrames(maxAccumFrames);
       settingsChanged = true;
     }
 
-    bool lowQualityInteract = backend_.customLowQualityWhileInteracting();
+    bool lowQualityInteract = usingWorkerRenderPath()
+        ? workerSettings_.customLowQualityWhileInteracting
+        : backend_.customLowQualityWhileInteracting();
     if (ImGui::Checkbox("Low Quality While Interacting", &lowQualityInteract)) {
-      backend_.setCustomLowQualityWhileInteracting(lowQualityInteract);
+      if (usingWorkerRenderPath())
+        workerSettings_.customLowQualityWhileInteracting = lowQualityInteract;
+      else
+        backend_.setCustomLowQualityWhileInteracting(lowQualityInteract);
       settingsChanged = true;
     }
 
-    bool fullResAccumOnly = backend_.customFullResAccumulationOnly();
+    bool fullResAccumOnly = usingWorkerRenderPath()
+        ? workerSettings_.customFullResAccumulationOnly
+        : backend_.customFullResAccumulationOnly();
     if (ImGui::Checkbox("Full-res Accumulation Only", &fullResAccumOnly)) {
-      backend_.setCustomFullResAccumulationOnly(fullResAccumOnly);
+      if (usingWorkerRenderPath())
+        workerSettings_.customFullResAccumulationOnly = fullResAccumOnly;
+      else
+        backend_.setCustomFullResAccumulationOnly(fullResAccumOnly);
       settingsChanged = true;
     }
 
-    int watchdogMs = backend_.customWatchdogTimeoutMs();
+    int watchdogMs = usingWorkerRenderPath() ? workerSettings_.customWatchdogTimeoutMs
+                                             : backend_.customWatchdogTimeoutMs();
     if (ImGui::InputInt("Watchdog Timeout (ms)", &watchdogMs)) {
-      backend_.setCustomWatchdogTimeoutMs(watchdogMs);
+      if (usingWorkerRenderPath())
+        workerSettings_.customWatchdogTimeoutMs = watchdogMs;
+      else
+        backend_.setCustomWatchdogTimeoutMs(watchdogMs);
       settingsChanged = true;
     }
 
     if (ImGui::Button("Reset Render")) {
-      backend_.resetAccumulation();
+      resetAccumulationTargets();
       settingsChanged = true;
     }
   }
 
   ImGui::SeparatorText("Diagnostics");
-  ImGui::Text("Current scale: %dx", backend_.currentScale());
-  ImGui::Text("Last render time: %.2f ms", backend_.lastFrameTimeMs());
-  ImGui::Text("Accumulation frames: %llu",
-      static_cast<unsigned long long>(backend_.accumulatedFrames()));
-  ImGui::Text("Dynamic mode active: %s",
-      backend_.dynamicModeActive() ? "Yes" : "No");
-  ImGui::Text("Backoff applied: %s", backend_.backoffApplied() ? "Yes" : "No");
+  if (!usingWorkerRenderPath()) {
+    ImGui::Text("Current scale: %dx", backend_.currentScale());
+    ImGui::Text("Last render time: %.2f ms", backend_.lastFrameTimeMs());
+    ImGui::Text("Accumulation frames: %llu",
+        static_cast<unsigned long long>(backend_.accumulatedFrames()));
+    ImGui::Text("Dynamic mode active: %s",
+        backend_.dynamicModeActive() ? "Yes" : "No");
+    ImGui::Text("Backoff applied: %s", backend_.backoffApplied() ? "Yes" : "No");
+  } else {
+    ImGui::Text("Current renderer: %s", currentRenderer_.toStdString().c_str());
+  }
 
   if (settingsChanged) {
+    if (usingWorkerRenderPath())
+      renderWorkerClient_->setRenderSettings(workerSettings_);
     renderOnce();
     update();
   }
@@ -500,31 +675,130 @@ void RenderWidget::paintGL()
 
 bool RenderWidget::loadModel(const QString &path)
 {
-  if (!backend_.loadObj(path.toStdString()))
+  if (sceneLoadInProgress_.load()) {
+    lastError_ = QStringLiteral("A scene load is already in progress.");
     return false;
+  }
 
-  currentBrlcadPath_.clear();
-  currentBrlcadObject_.clear();
-  currentBrlcadObjects_.clear();
-  resetView();
+  startAsyncLoad(
+      [this, path]() {
+        if (usingWorkerRenderPath()) {
+          const auto result = renderWorkerClient_->loadObj(path);
+          QMetaObject::invokeMethod(this, [this, result, path]() {
+            sceneLoadInProgress_.store(false);
+            lastError_ = result.errorMessage;
+            if (result.success) {
+              sceneBoundsMin_ = result.boundsMin;
+              sceneBoundsMax_ = result.boundsMax;
+              currentSceneIsObj_ = true;
+              currentModelPath_ = path;
+              currentBrlcadPath_.clear();
+              currentBrlcadObject_.clear();
+              currentBrlcadObjects_.clear();
+              resetView();
+            } else {
+              update();
+            }
+            emit sceneLoadFinished(result.success, result.errorMessage);
+          }, Qt::QueuedConnection);
+          return;
+        }
+
+        const bool ok = backend_.loadObj(path.toStdString());
+        const QString error =
+            ok ? QString() : QString::fromStdString(backend_.lastError());
+
+        QMetaObject::invokeMethod(this, [this, ok, error, path]() {
+          sceneLoadInProgress_.store(false);
+          lastError_ = error;
+          if (ok) {
+            currentSceneIsObj_ = true;
+            currentModelPath_ = path;
+            backend_.resize(width(), height());
+            currentBrlcadPath_.clear();
+            currentBrlcadObject_.clear();
+            currentBrlcadObjects_.clear();
+            resetView();
+          } else {
+            update();
+          }
+          emit sceneLoadFinished(ok, error);
+        }, Qt::QueuedConnection);
+      },
+      QStringLiteral("Loading OBJ scene..."));
   return true;
 }
 
 bool RenderWidget::loadBrlcadModel(const QString &path, const QString &topObject)
 {
-  if (!backend_.loadBrlcad(path.toStdString(), topObject.toStdString()))
+  if (sceneLoadInProgress_.load()) {
+    lastError_ = QStringLiteral("A scene load is already in progress.");
     return false;
+  }
 
-  currentBrlcadPath_ = path;
-  currentBrlcadObject_ = topObject.trimmed().isEmpty() ? QStringLiteral("all")
-                                                       : topObject.trimmed();
-  currentBrlcadObjects_ = listBrlcadObjects(path);
-  resetView();
+  const QString resolvedObject =
+      topObject.trimmed().isEmpty() ? QStringLiteral("all") : topObject.trimmed();
+  const QStringList availableObjects = listBrlcadObjects(path);
+
+  startAsyncLoad(
+      [this, path, resolvedObject, availableObjects]() {
+        if (usingWorkerRenderPath()) {
+          const auto result = renderWorkerClient_->loadBrlcad(path, resolvedObject);
+          QMetaObject::invokeMethod(this,
+              [this, result, path, resolvedObject, availableObjects]() {
+            sceneLoadInProgress_.store(false);
+            lastError_ = result.errorMessage;
+            if (result.success) {
+              sceneBoundsMin_ = result.boundsMin;
+              sceneBoundsMax_ = result.boundsMax;
+              currentSceneIsObj_ = false;
+              currentModelPath_.clear();
+              currentBrlcadPath_ = path;
+              currentBrlcadObject_ = resolvedObject;
+              currentBrlcadObjects_ = availableObjects;
+              resetView();
+            } else {
+              update();
+            }
+            emit sceneLoadFinished(result.success, result.errorMessage);
+          },
+              Qt::QueuedConnection);
+          return;
+        }
+
+        const bool ok =
+            backend_.loadBrlcad(path.toStdString(), resolvedObject.toStdString());
+        const QString error =
+            ok ? QString() : QString::fromStdString(backend_.lastError());
+
+        QMetaObject::invokeMethod(this,
+            [this, ok, error, path, resolvedObject, availableObjects]() {
+              sceneLoadInProgress_.store(false);
+              lastError_ = error;
+              if (ok) {
+                currentSceneIsObj_ = false;
+                currentModelPath_.clear();
+                backend_.resize(width(), height());
+                currentBrlcadPath_ = path;
+                currentBrlcadObject_ = resolvedObject;
+                currentBrlcadObjects_ = availableObjects;
+                resetView();
+              } else {
+                update();
+              }
+              emit sceneLoadFinished(ok, error);
+            },
+            Qt::QueuedConnection);
+      },
+      QStringLiteral("Loading BRL-CAD scene..."));
   return true;
 }
 
 QStringList RenderWidget::listBrlcadObjects(const QString &path) const
 {
+  if (renderWorkerClient_ && renderWorkerClient_->isConnected())
+    return renderWorkerClient_->listBrlcadObjects(path);
+
   QStringList out;
   try {
     const auto names = backend_.listBrlcadObjects(path.toStdString());
@@ -544,14 +818,17 @@ bool RenderWidget::reloadBrlcadObject(const QString &topObject)
 
 QString RenderWidget::lastError() const
 {
-  return QString::fromStdString(backend_.lastError());
+  return lastError_;
 }
 
 void RenderWidget::resetView()
 {
-  center_ = backend_.getBoundsCenter();
+  if (sceneLoadInProgress_.load())
+    return;
 
-  float maxExtent = backend_.getBoundsMaxExtent();
+  center_ = sceneBoundsCenter();
+
+  float maxExtent = sceneBoundsMaxExtent();
   if (maxExtent < 0.001f)
     maxExtent = 1.0f;
 
@@ -567,7 +844,7 @@ void RenderWidget::resetView()
   flyPitch_ = pitch_;
   syncFlyFromOrbit();
 
-  backend_.resetAccumulation();
+  resetAccumulationTargets();
   syncCameraToBackend();
   renderOnce();
   update();
@@ -575,6 +852,12 @@ void RenderWidget::resetView()
 
 void RenderWidget::setInputMode(InputMode mode)
 {
+  if (sceneLoadInProgress_.load()) {
+    inputMode_ = mode;
+    update();
+    return;
+  }
+
   if (mode == inputMode_)
     return;
 
@@ -586,7 +869,7 @@ void RenderWidget::setInputMode(InputMode mode)
 
   inputMode_ = mode;
 
-  backend_.resetAccumulation();
+  resetAccumulationTargets();
   syncCameraToBackend();
   renderOnce();
   update();
@@ -603,6 +886,9 @@ void RenderWidget::mousePressEvent(QMouseEvent *e)
 
   imguiMousePos_ = e->position();
   update();
+
+  if (sceneLoadInProgress_.load())
+    return;
 
   // let camera only react if ImGui doesn't want mouse
   if (ImGui::GetIO().WantCaptureMouse)
@@ -622,6 +908,11 @@ void RenderWidget::mouseReleaseEvent(QMouseEvent *e)
     imguiMouseDown_[2] = false;
 
   imguiMousePos_ = e->position();
+  if (sceneLoadInProgress_.load()) {
+    update();
+    return;
+  }
+
   if (!(imguiMouseDown_[0] || imguiMouseDown_[1] || imguiMouseDown_[2]))
     backend_.setInteracting(false);
   update();
@@ -631,6 +922,9 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
 {
   imguiMousePos_ = e->position();
   update();
+
+  if (sceneLoadInProgress_.load())
+    return;
 
   if (ImGui::GetIO().WantCaptureMouse)
     return;
@@ -660,7 +954,7 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
     if (e->buttons() & Qt::LeftButton) {
       rotateOrbit(d.x() * orbitSpeed_, d.y() * orbitSpeed_);
 
-      backend_.resetAccumulation();
+      resetAccumulationTargets();
       syncCameraToBackend();
       renderOnce();
       return;
@@ -677,7 +971,7 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
           center_.y - right.y * sx + upCam.y * sy,
           center_.z - right.z * sx + upCam.z * sy);
 
-      backend_.resetAccumulation();
+      resetAccumulationTargets();
       syncCameraToBackend();
       renderOnce();
       return;
@@ -688,7 +982,7 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
       flyYaw_ += d.x() * orbitSpeed_;
       flyPitch_ += d.y() * orbitSpeed_;
 
-      backend_.resetAccumulation();
+      resetAccumulationTargets();
       syncCameraToBackend();
       renderOnce();
       return;
@@ -701,6 +995,9 @@ void RenderWidget::wheelEvent(QWheelEvent *e)
   imguiMouseWheel_ += e->angleDelta().y() / 120.0f;
   update();
 
+  if (sceneLoadInProgress_.load())
+    return;
+
   if (ImGui::GetIO().WantCaptureMouse)
     return;
 
@@ -711,7 +1008,7 @@ void RenderWidget::wheelEvent(QWheelEvent *e)
     return;
 
   if (inputMode_ == InputMode::Orbit) {
-    float maxExtent = backend_.getBoundsMaxExtent();
+    float maxExtent = sceneBoundsMaxExtent();
     if (maxExtent < 0.001f)
       maxExtent = 1.0f;
 
@@ -725,7 +1022,7 @@ void RenderWidget::wheelEvent(QWheelEvent *e)
     fovy_ = clampf(fovy_, 20.f, 90.f);
   }
 
-  backend_.resetAccumulation();
+  resetAccumulationTargets();
   syncCameraToBackend();
   renderOnce();
   backend_.setInteracting(false);
@@ -748,6 +1045,9 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
   sendKey(Qt::Key_Q, ImGuiKey_Q);
   sendKey(Qt::Key_E, ImGuiKey_E);
 
+  if (sceneLoadInProgress_.load())
+    return;
+
   if (io.WantCaptureKeyboard)
     return;
 
@@ -760,7 +1060,7 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
   if (e->key() == Qt::Key_Tab) {
     inputMode_ =
         (inputMode_ == InputMode::Orbit) ? InputMode::Fly : InputMode::Orbit;
-    backend_.resetAccumulation();
+    resetAccumulationTargets();
     syncCameraToBackend();
     renderOnce();
     return;
@@ -772,7 +1072,7 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
   vec3f forward = forwardFromAngles(flyYaw_, flyPitch_);
   vec3f right = normalizeVec(crossVec(forward, worldUp()));
 
-  float modelScale = backend_.getBoundsMaxExtent();
+  float modelScale = sceneBoundsMaxExtent();
   if (modelScale < 0.001f)
     modelScale = 1.0f;
 
@@ -803,7 +1103,7 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
         flyPos_.y + worldUp().y * step,
         flyPos_.z + worldUp().z * step);
 
-  backend_.resetAccumulation();
+  resetAccumulationTargets();
   syncCameraToBackend();
   renderOnce();
 }
@@ -824,6 +1124,9 @@ void RenderWidget::keyReleaseEvent(QKeyEvent *e)
   sendKey(Qt::Key_D, ImGuiKey_D);
   sendKey(Qt::Key_Q, ImGuiKey_Q);
   sendKey(Qt::Key_E, ImGuiKey_E);
+
+  if (sceneLoadInProgress_.load())
+    return;
 
   if (io.WantCaptureKeyboard)
     return;
@@ -846,12 +1149,19 @@ void RenderWidget::focusOutEvent(QFocusEvent *e)
 {
   Q_UNUSED(e);
   imguiHasFocus_ = false;
-  backend_.setInteracting(false);
+  if (!sceneLoadInProgress_.load())
+    backend_.setInteracting(false);
   update();
 }
 
 void RenderWidget::setUpAxis(UpAxis axis)
 {
+  if (sceneLoadInProgress_.load()) {
+    upAxis_ = axis;
+    update();
+    return;
+  }
+
   if (axis == upAxis_)
     return;
 
@@ -863,7 +1173,7 @@ void RenderWidget::setUpAxis(UpAxis axis)
     syncOrbitFromFly();
   }
 
-  backend_.resetAccumulation();
+  resetAccumulationTargets();
   syncCameraToBackend();
   renderOnce();
 }
@@ -891,6 +1201,55 @@ QStringList RenderWidget::currentBrlcadObjects() const
 bool RenderWidget::hasBrlcadScene() const
 {
   return !currentBrlcadPath_.isEmpty();
+}
+
+void RenderWidget::setRenderWorkerClient(RenderWorkerClient *client)
+{
+  renderWorkerClient_ = client;
+}
+
+void RenderWidget::replayWorkerState()
+{
+  if (!usingWorkerRenderPath())
+    return;
+
+  renderWorkerClient_->resize(width(), height());
+  renderWorkerClient_->setRenderer(currentRenderer_);
+  renderWorkerClient_->setRenderSettings(workerSettings_);
+
+  if (currentSceneIsObj_ && !currentModelPath_.isEmpty()) {
+    const auto result = renderWorkerClient_->loadObj(currentModelPath_);
+    if (result.success) {
+      sceneBoundsMin_ = result.boundsMin;
+      sceneBoundsMax_ = result.boundsMax;
+    }
+  } else if (!currentBrlcadPath_.isEmpty()) {
+    const QString objectName =
+        currentBrlcadObject_.trimmed().isEmpty() ? QStringLiteral("all") : currentBrlcadObject_;
+    const auto result = renderWorkerClient_->loadBrlcad(currentBrlcadPath_, objectName);
+    if (result.success) {
+      sceneBoundsMin_ = result.boundsMin;
+      sceneBoundsMax_ = result.boundsMax;
+    }
+  }
+
+  syncCameraToBackend();
+  resetAccumulationTargets();
+  renderOnce();
+}
+
+void RenderWidget::startAsyncLoad(
+    const std::function<void()> &loader, const QString &statusText)
+{
+  if (sceneLoadThread_.joinable())
+    sceneLoadThread_.join();
+
+  sceneLoadInProgress_.store(true);
+  loadStatusText_ = statusText;
+  lastError_.clear();
+  update();
+
+  sceneLoadThread_ = std::thread([loader]() { loader(); });
 }
 
 vec3f RenderWidget::worldUp() const
