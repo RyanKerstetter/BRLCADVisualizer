@@ -54,9 +54,9 @@ void RenderWidget::applyViewAction(
   if (result.action == Action::None)
     return;
 
-  vec3f forward = orbitForward_;
+  vec3f forward = currentCameraForward();
   vec3f right = orbitRight();
-  vec3f upCam = orbitUp_;
+  vec3f upCam = currentCameraUp();
 
   if (result.action == Action::Translate) {
     float sx = float(delta.x()) * panSpeed_ * dist_;
@@ -89,17 +89,32 @@ void RenderWidget::applyViewAction(
     if (result.axis == Axis::Free) {
       rotateOrbit(dx, dy);
     } else if (result.axis == Axis::X) {
-      const vec3f axis(1.f, 0.f, 0.f);
-      orbitForward_ = normalizeVec(rotateAroundAxis(orbitForward_, axis, dy));
-      orbitUp_ = normalizeVec(rotateAroundAxis(orbitUp_, axis, dy));
+      const vec3f eye = currentCameraPosition();
+      const vec3f offset = rotateAroundAxis(
+          vec3f(eye.x - center_.x, eye.y - center_.y, eye.z - center_.z),
+          vec3f(1.f, 0.f, 0.f),
+          dy);
+      setOrbitFromEyePosition(
+          vec3f(center_.x + offset.x, center_.y + offset.y, center_.z + offset.z));
+      syncFlyFromOrbit();
     } else if (result.axis == Axis::Y) {
-      const vec3f axis(0.f, 1.f, 0.f);
-      orbitForward_ = normalizeVec(rotateAroundAxis(orbitForward_, axis, dx));
-      orbitUp_ = normalizeVec(rotateAroundAxis(orbitUp_, axis, dx));
+      const vec3f eye = currentCameraPosition();
+      const vec3f offset = rotateAroundAxis(
+          vec3f(eye.x - center_.x, eye.y - center_.y, eye.z - center_.z),
+          vec3f(0.f, 1.f, 0.f),
+          dx);
+      setOrbitFromEyePosition(
+          vec3f(center_.x + offset.x, center_.y + offset.y, center_.z + offset.z));
+      syncFlyFromOrbit();
     } else if (result.axis == Axis::Z) {
-      const vec3f axis(0.f, 0.f, 1.f);
-      orbitForward_ = normalizeVec(rotateAroundAxis(orbitForward_, axis, dx));
-      orbitUp_ = normalizeVec(rotateAroundAxis(orbitUp_, axis, dx));
+      const vec3f eye = currentCameraPosition();
+      const vec3f offset = rotateAroundAxis(
+          vec3f(eye.x - center_.x, eye.y - center_.y, eye.z - center_.z),
+          vec3f(0.f, 0.f, 1.f),
+          dx);
+      setOrbitFromEyePosition(
+          vec3f(center_.x + offset.x, center_.y + offset.y, center_.z + offset.z));
+      syncFlyFromOrbit();
     }
   }
 
@@ -135,11 +150,8 @@ float RenderWidget::fitDistanceFromBounds(float maxExtent, float fovyDeg)
 
 void RenderWidget::syncFlyFromOrbit()
 {
-  vec3f forward = orbitForward_;
-  vec3f eye(center_.x - dist_ * forward.x,
-      center_.y - dist_ * forward.y,
-      center_.z - dist_ * forward.z);
-
+  const vec3f eye = currentCameraPosition();
+  const vec3f forward = currentCameraForward();
   flyPos_ = eye;
   anglesFromForward(forward, flyYaw_, flyPitch_);
 }
@@ -153,20 +165,16 @@ void RenderWidget::syncOrbitFromFly()
   center_ = vec3f(eye.x + forward.x * dist_,
       eye.y + forward.y * dist_,
       eye.z + forward.z * dist_);
-
-  orbitForward_ = forward;
-  alignOrbitUpToReference();
-  yaw_ = flyYaw_;
-  pitch_ = flyPitch_;
+  setOrbitFromEyePosition(eye);
 }
 
 vec3f RenderWidget::currentCameraPosition() const
 {
   if (inputMode_ == InputMode::Orbit) {
-    const vec3f forward = orbitForward_;
-    return vec3f(center_.x - dist_ * forward.x,
-        center_.y - dist_ * forward.y,
-        center_.z - dist_ * forward.z);
+    const vec3f eyeDir = orbitEyeDirection();
+    return vec3f(center_.x + dist_ * eyeDir.x,
+        center_.y + dist_ * eyeDir.y,
+        center_.z + dist_ * eyeDir.z);
   }
 
   return flyPos_;
@@ -175,15 +183,24 @@ vec3f RenderWidget::currentCameraPosition() const
 vec3f RenderWidget::currentCameraForward() const
 {
   if (inputMode_ == InputMode::Orbit)
-    return normalizeVec(orbitForward_);
+    return normalizeVec(vec3f(-orbitEyeDirection().x, -orbitEyeDirection().y, -orbitEyeDirection().z));
 
   return normalizeVec(forwardFromAngles(flyYaw_, flyPitch_));
 }
 
 vec3f RenderWidget::currentCameraUp() const
 {
-  if (inputMode_ == InputMode::Orbit)
-    return normalizeVec(orbitUp_);
+  if (inputMode_ == InputMode::Orbit) {
+    const vec3f forward = currentCameraForward();
+    vec3f projectedUp = projectOntoPlane(worldUp(), forward);
+    projectedUp = normalizeVec(projectedUp);
+    if (std::fabs(projectedUp.x) < 1e-6f && std::fabs(projectedUp.y) < 1e-6f
+        && std::fabs(projectedUp.z) < 1e-6f) {
+      projectedUp =
+          normalizeVec(projectOntoPlane(worldForwardReference(), forward));
+    }
+    return normalizeVec(projectedUp);
+  }
 
   return normalizeVec(worldUp());
 }
@@ -317,14 +334,11 @@ void RenderWidget::resizeGL(int w, int h)
 void RenderWidget::syncCameraToBackend()
 {
   if (inputMode_ == InputMode::Orbit) {
-    vec3f forward = orbitForward_;
-    vec3f eye(center_.x - dist_ * forward.x,
-        center_.y - dist_ * forward.y,
-        center_.z - dist_ * forward.z);
-
-    backend_.setCamera(eye, center_, orbitUp_, fovy_);
+    const vec3f eye = currentCameraPosition();
+    const vec3f up = currentCameraUp();
+    backend_.setCamera(eye, center_, up, fovy_);
     if (usingWorkerRenderPath())
-      renderWorkerClient_->setCamera(eye, center_, orbitUp_, fovy_);
+      renderWorkerClient_->setCamera(eye, center_, up, fovy_);
   } else {
     flyPitch_ = clampf(flyPitch_, -1.4f, 1.4f);
 
@@ -1014,16 +1028,10 @@ void RenderWidget::resetView()
   if (maxExtent < 0.001f)
     maxExtent = 1.0f;
 
-  yaw_ = 0.3f;
-  pitch_ = 0.2f;
   fovy_ = 60.0f;
-  orbitForward_ = forwardFromAngles(yaw_, pitch_);
-  alignOrbitUpToReference();
-
   dist_ = fitDistanceFromBounds(maxExtent, fovy_);
-
-  flyYaw_ = yaw_;
-  flyPitch_ = pitch_;
+  orbitTheta_ = 0.3f;
+  orbitPhi_ = 1.77079633f;
   syncFlyFromOrbit();
 
   resetAccumulationTargets();
@@ -1144,7 +1152,7 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
 
     if (e->buttons() & Qt::RightButton) {
       vec3f right = orbitRight();
-      vec3f upCam = orbitUp_;
+      vec3f upCam = currentCameraUp();
 
       float sx = float(d.x()) * panSpeed_ * dist_;
       float sy = float(d.y()) * panSpeed_ * dist_;
@@ -1357,9 +1365,10 @@ void RenderWidget::setUpAxis(UpAxis axis)
   if (axis == upAxis_)
     return;
 
+  const vec3f orbitEye = currentCameraPosition();
   upAxis_ = axis;
   if (inputMode_ == InputMode::Orbit) {
-    alignOrbitUpToReference();
+    setOrbitFromEyePosition(orbitEye);
     syncFlyFromOrbit();
   } else {
     syncOrbitFromFly();
@@ -1493,27 +1502,69 @@ vec3f RenderWidget::projectOntoPlane(const vec3f &v, const vec3f &normal) const
   return vec3f(v.x - normal.x * dot, v.y - normal.y * dot, v.z - normal.z * dot);
 }
 
+vec3f RenderWidget::orbitEyeDirection() const
+{
+  const vec3f up = worldUp();
+  const vec3f forwardRef = worldForwardReference();
+  const vec3f rightRef = normalizeVec(crossVec(forwardRef, up));
+
+  const float sinPhi = std::sin(orbitPhi_);
+  const float cosPhi = std::cos(orbitPhi_);
+  const float cosTheta = std::cos(orbitTheta_);
+  const float sinTheta = std::sin(orbitTheta_);
+
+  return normalizeVec(vec3f(forwardRef.x * cosTheta * sinPhi
+                                + rightRef.x * sinTheta * sinPhi + up.x * cosPhi,
+      forwardRef.y * cosTheta * sinPhi + rightRef.y * sinTheta * sinPhi
+          + up.y * cosPhi,
+      forwardRef.z * cosTheta * sinPhi + rightRef.z * sinTheta * sinPhi
+          + up.z * cosPhi));
+}
+
+void RenderWidget::setOrbitFromEyePosition(const vec3f &eye)
+{
+  vec3f offset(
+      eye.x - center_.x, eye.y - center_.y, eye.z - center_.z);
+  float radius = std::sqrt(
+      offset.x * offset.x + offset.y * offset.y + offset.z * offset.z);
+  if (radius <= 1e-6f)
+    radius = 1e-6f;
+  dist_ = radius;
+
+  const vec3f dir = vec3f(offset.x / radius, offset.y / radius, offset.z / radius);
+  const vec3f up = worldUp();
+  const vec3f forwardRef = worldForwardReference();
+  const vec3f rightRef = normalizeVec(crossVec(forwardRef, up));
+
+  const float upDot = std::clamp(
+      dir.x * up.x + dir.y * up.y + dir.z * up.z, -1.f, 1.f);
+  orbitPhi_ = std::acos(upDot);
+  orbitPhi_ = clampf(orbitPhi_, 0.001f, 3.14159265f - 0.001f);
+
+  const float sinPhi = std::sin(orbitPhi_);
+  if (std::fabs(sinPhi) > 1e-6f) {
+    const float forwardComp =
+        dir.x * forwardRef.x + dir.y * forwardRef.y + dir.z * forwardRef.z;
+    const float rightComp =
+        dir.x * rightRef.x + dir.y * rightRef.y + dir.z * rightRef.z;
+    orbitTheta_ = std::atan2(rightComp, forwardComp);
+  }
+}
+
 vec3f RenderWidget::orbitRight() const
 {
-  vec3f right = crossVec(orbitForward_, orbitUp_);
+  vec3f right = crossVec(currentCameraForward(), currentCameraUp());
   right = normalizeVec(right);
   if (std::fabs(right.x) < 1e-6f && std::fabs(right.y) < 1e-6f
       && std::fabs(right.z) < 1e-6f) {
-    right = normalizeVec(crossVec(orbitForward_, worldForwardReference()));
+    right = normalizeVec(crossVec(currentCameraForward(), worldForwardReference()));
   }
   return right;
 }
 
 void RenderWidget::alignOrbitUpToReference()
 {
-  orbitForward_ = normalizeVec(orbitForward_);
-  vec3f projectedUp = projectOntoPlane(worldUp(), orbitForward_);
-  projectedUp = normalizeVec(projectedUp);
-  if (std::fabs(projectedUp.x) < 1e-6f && std::fabs(projectedUp.y) < 1e-6f
-      && std::fabs(projectedUp.z) < 1e-6f) {
-    projectedUp = normalizeVec(projectOntoPlane(worldForwardReference(), orbitForward_));
-  }
-  orbitUp_ = normalizeVec(projectedUp);
+  setOrbitFromEyePosition(currentCameraPosition());
 }
 
 vec3f RenderWidget::rotateAroundAxis(const vec3f &v, const vec3f &axis, float angle) const
@@ -1531,13 +1582,7 @@ vec3f RenderWidget::rotateAroundAxis(const vec3f &v, const vec3f &axis, float an
 
 void RenderWidget::rotateOrbit(float yawDelta, float pitchDelta)
 {
-  orbitForward_ = normalizeVec(rotateAroundAxis(orbitForward_, orbitUp_, yawDelta));
-
-  const vec3f right = orbitRight();
-  orbitForward_ = normalizeVec(rotateAroundAxis(orbitForward_, right, pitchDelta));
-  orbitUp_ = normalizeVec(rotateAroundAxis(orbitUp_, right, pitchDelta));
-
-  const vec3f correctedRight = orbitRight();
-  orbitUp_ = normalizeVec(crossVec(correctedRight, orbitForward_));
-  anglesFromForward(orbitForward_, yaw_, pitch_);
+  orbitTheta_ += yawDelta;
+  orbitPhi_ = clampf(orbitPhi_ + pitchDelta, 0.001f, 3.14159265f - 0.001f);
+  syncFlyFromOrbit();
 }

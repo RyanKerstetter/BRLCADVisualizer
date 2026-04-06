@@ -102,6 +102,8 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
       const rkcommon::math::vec3f &forward, float &yaw, float &pitch) const;
   rkcommon::math::vec3f projectOntoPlane(
       const rkcommon::math::vec3f &v, const rkcommon::math::vec3f &normal) const;
+  rkcommon::math::vec3f orbitEyeDirection() const;
+  void setOrbitFromEyePosition(const rkcommon::math::vec3f &eye);
   rkcommon::math::vec3f orbitRight() const;
   void alignOrbitUpToReference();
   rkcommon::math::vec3f rotateAroundAxis(
@@ -146,12 +148,9 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
 
   // Orbit camera
   rkcommon::math::vec3f center_{0.f, 0.f, 1.5f};
-  rkcommon::math::vec3f orbitForward_{0.f, 1.f, 0.f};
-  rkcommon::math::vec3f orbitUp_{0.f, 0.f, 1.f};
-
-  float yaw_ = 0.3f;
-  float pitch_ = 0.2f;
   float dist_ = 4.0f;
+  float orbitTheta_ = 0.3f;
+  float orbitPhi_ = 1.77079633f;
   float fovy_ = 60.0f;
 
   float orbitSpeed_ = 0.01f;
