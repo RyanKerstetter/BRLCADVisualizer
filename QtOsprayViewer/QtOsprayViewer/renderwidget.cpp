@@ -4,6 +4,7 @@
 
 #include <QMetaObject>
 #include <QPainter>
+#include <QPen>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -150,6 +151,107 @@ void RenderWidget::syncOrbitFromFly()
   alignOrbitUpToReference();
   yaw_ = flyYaw_;
   pitch_ = flyPitch_;
+}
+
+vec3f RenderWidget::currentCameraPosition() const
+{
+  if (inputMode_ == InputMode::Orbit) {
+    const vec3f forward = orbitForward_;
+    return vec3f(center_.x - dist_ * forward.x,
+        center_.y - dist_ * forward.y,
+        center_.z - dist_ * forward.z);
+  }
+
+  return flyPos_;
+}
+
+vec3f RenderWidget::currentCameraForward() const
+{
+  if (inputMode_ == InputMode::Orbit)
+    return normalizeVec(orbitForward_);
+
+  return normalizeVec(forwardFromAngles(flyYaw_, flyPitch_));
+}
+
+vec3f RenderWidget::currentCameraUp() const
+{
+  if (inputMode_ == InputMode::Orbit)
+    return normalizeVec(orbitUp_);
+
+  return normalizeVec(worldUp());
+}
+
+bool RenderWidget::projectWorldToScreen(const vec3f &worldPos, QPointF &screenPos) const
+{
+  const vec3f eye = currentCameraPosition();
+  vec3f forward = currentCameraForward();
+  vec3f up = currentCameraUp();
+  vec3f right = normalizeVec(crossVec(forward, up));
+  up = normalizeVec(crossVec(right, forward));
+
+  const vec3f rel(worldPos.x - eye.x, worldPos.y - eye.y, worldPos.z - eye.z);
+  const float viewX = rel.x * right.x + rel.y * right.y + rel.z * right.z;
+  const float viewY = rel.x * up.x + rel.y * up.y + rel.z * up.z;
+  const float viewZ = rel.x * forward.x + rel.y * forward.y + rel.z * forward.z;
+
+  if (viewZ <= 1e-4f)
+    return false;
+
+  const float aspect = std::max(1.0f, float(width())) / std::max(1.0f, float(height()));
+  const float tanHalfY = std::tan(0.5f * fovy_ * 3.14159265f / 180.0f);
+  const float tanHalfX = tanHalfY * aspect;
+  if (tanHalfX <= 0.0f || tanHalfY <= 0.0f)
+    return false;
+
+  const float ndcX = viewX / (viewZ * tanHalfX);
+  const float ndcY = viewY / (viewZ * tanHalfY);
+
+  screenPos.setX((ndcX * 0.5f + 0.5f) * float(width()));
+  screenPos.setY((1.0f - (ndcY * 0.5f + 0.5f)) * float(height()));
+  return true;
+}
+
+void RenderWidget::drawRotationAxisOverlay(QPainter &p)
+{
+  QPointF origin;
+  if (!projectWorldToScreen(center_, origin))
+    return;
+
+  float axisLength = sceneBoundsMaxExtent() * 0.12f;
+  axisLength = std::max(axisLength, 0.1f);
+  axisLength = std::min(axisLength, std::max(1.0f, dist_ * 0.25f));
+
+  const struct AxisLine
+  {
+    vec3f dir;
+    QColor color;
+    const char *label;
+  } axes[] = {
+      {vec3f(1.f, 0.f, 0.f), QColor(220, 80, 80), "X"},
+      {vec3f(0.f, 1.f, 0.f), QColor(80, 210, 110), "Y"},
+      {vec3f(0.f, 0.f, 1.f), QColor(80, 140, 255), "Z"},
+  };
+
+  p.setRenderHint(QPainter::Antialiasing, true);
+  p.setBrush(QColor(245, 245, 245));
+  p.setPen(Qt::NoPen);
+  p.drawEllipse(origin, 3.5, 3.5);
+
+  for (const auto &axis : axes) {
+    QPointF tip;
+    const vec3f end(center_.x + axis.dir.x * axisLength,
+        center_.y + axis.dir.y * axisLength,
+        center_.z + axis.dir.z * axisLength);
+    if (!projectWorldToScreen(end, tip))
+      continue;
+
+    QPen pen(axis.color, 2.0);
+    p.setPen(pen);
+    p.drawLine(origin, tip);
+
+    p.setPen(axis.color.lighter(120));
+    p.drawText(tip + QPointF(4.0, -4.0), QString::fromLatin1(axis.label));
+  }
 }
 
 float RenderWidget::clampf(float v, float lo, float hi)
@@ -331,6 +433,7 @@ void RenderWidget::paintGL()
     QImage img = image_.rgbSwapped().mirrored(false, true);
     p.drawImage(rect(), img);
   }
+  drawRotationAxisOverlay(p);
   p.end();
 
   ImGuiIO &io = ImGui::GetIO();

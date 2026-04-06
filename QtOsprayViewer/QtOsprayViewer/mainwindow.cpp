@@ -203,13 +203,7 @@ void MainWindow::populateDemoModelsMenu(QMenu *menu)
 {
   if (!menu)
     return;
-
-#ifdef BRLCAD_INSTALL_PREFIX
-  const QString dbDir =
-      QDir(QStringLiteral(BRLCAD_INSTALL_PREFIX)).filePath(QStringLiteral("share/db"));
-#else
-  const QString dbDir;
-#endif
+  const QString dbDir = demoModelsDir();
 
   struct DemoModel
   {
@@ -245,14 +239,25 @@ void MainWindow::populateDemoModelsMenu(QMenu *menu)
 
 QString MainWindow::defaultDemoPath() const
 {
-#ifdef BRLCAD_INSTALL_PREFIX
-  const QString dbDir =
-      QDir(QStringLiteral(BRLCAD_INSTALL_PREFIX)).filePath(QStringLiteral("share/db"));
+  const QString dbDir = demoModelsDir();
   const QString mossPath = QDir(dbDir).filePath(QStringLiteral("moss.g"));
   if (QFileInfo::exists(mossPath))
     return mossPath;
-#endif
   return QString();
+}
+
+QString MainWindow::demoModelsDir() const
+{
+  const QString localDir =
+      QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("models"));
+  if (QFileInfo::exists(QDir(localDir).filePath(QStringLiteral("moss.g"))))
+    return localDir;
+
+#ifdef BRLCAD_INSTALL_PREFIX
+  return QDir(QStringLiteral(BRLCAD_INSTALL_PREFIX)).filePath(QStringLiteral("share/db"));
+#else
+  return QString();
+#endif
 }
 
 void MainWindow::loadStartupDemo()

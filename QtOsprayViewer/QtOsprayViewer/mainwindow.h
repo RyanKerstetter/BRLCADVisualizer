@@ -20,6 +20,7 @@ class MainWindow : public QMainWindow
   void setupMenus();
   void updateBrlcadMenuState();
   void chooseAndLoadBrlcadObject(const QString &path, const QStringList &objects);
+  QString demoModelsDir() const;
   void populateDemoModelsMenu(QMenu *menu);
   QString defaultDemoPath() const;
   void loadStartupDemo();

@@ -90,6 +90,11 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   static float fitDistanceFromBounds(float maxExtent, float fovyDeg);
   void syncFlyFromOrbit();
   void syncOrbitFromFly();
+  rkcommon::math::vec3f currentCameraPosition() const;
+  rkcommon::math::vec3f currentCameraForward() const;
+  rkcommon::math::vec3f currentCameraUp() const;
+  bool projectWorldToScreen(const rkcommon::math::vec3f &worldPos, QPointF &screenPos) const;
+  void drawRotationAxisOverlay(QPainter &p);
   rkcommon::math::vec3f worldUp() const;
   rkcommon::math::vec3f worldForwardReference() const;
   rkcommon::math::vec3f forwardFromAngles(float yaw, float pitch) const;
