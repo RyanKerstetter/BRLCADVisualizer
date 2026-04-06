@@ -7,7 +7,6 @@
 #include <QActionGroup>
 #include <QCoreApplication>
 #include <QFileDialog>
-#include <QFileInfo>
 #include <QInputDialog>
 #include <QMenuBar>
 #include <QMessageBox>

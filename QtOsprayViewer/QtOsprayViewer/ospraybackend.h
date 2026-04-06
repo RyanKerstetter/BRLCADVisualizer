@@ -145,6 +145,8 @@ class OsprayBackend
   ospray::cpp::Renderer renderer_;
   ospray::cpp::Camera camera_;
   ospray::cpp::World world_;
+  ospray::cpp::CopiedData brlcadColorData_;
+  ospray::cpp::CopiedData brlcadMaterialData_;
   ospray::cpp::FrameBuffer passFb_;
   ospray::cpp::FrameBuffer accumFb_;
   ospray::cpp::Future currentFrame_;

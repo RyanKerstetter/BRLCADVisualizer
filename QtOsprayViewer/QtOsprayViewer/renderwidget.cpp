@@ -408,41 +408,54 @@ void RenderWidget::paintGL()
     rendererMode = 1;
   else if (rendererName == "pathtracer")
     rendererMode = 2;
+  else if (rendererName.rfind("debug:", 0) == 0)
+    rendererMode = 3;
   else
     rendererMode = 0;
 
-  if (ImGui::RadioButton("ao", rendererMode == 0)) {
-    rendererMode = 0;
-    currentRenderer_ = QStringLiteral("ao");
+  auto applyRendererSelection = [this](const QString &rendererId) {
+    currentRenderer_ = rendererId;
     if (usingWorkerRenderPath())
       renderWorkerClient_->setRenderer(currentRenderer_);
     else
-      backend_.setRenderer("ao");
+      backend_.setRenderer(currentRenderer_.toStdString());
     resetAccumulationTargets();
     renderOnce();
     update();
+  };
+
+  if (ImGui::RadioButton("ao", rendererMode == 0)) {
+    rendererMode = 0;
+    applyRendererSelection(QStringLiteral("ao"));
   }
   if (ImGui::RadioButton("SciVis", rendererMode == 1)) {
     rendererMode = 1;
-    currentRenderer_ = QStringLiteral("scivis");
-    if (usingWorkerRenderPath())
-      renderWorkerClient_->setRenderer(currentRenderer_);
-    else
-      backend_.setRenderer("scivis");
-    resetAccumulationTargets();
-    renderOnce();
-    update();
+    applyRendererSelection(QStringLiteral("scivis"));
   }
   if (ImGui::RadioButton("PathTracer", rendererMode == 2)) {
     rendererMode = 2;
-    currentRenderer_ = QStringLiteral("pathtracer");
-    if (usingWorkerRenderPath())
-      renderWorkerClient_->setRenderer(currentRenderer_);
-    else
-      backend_.setRenderer("pathtracer");
-    resetAccumulationTargets();
-    renderOnce();
-    update();
+    applyRendererSelection(QStringLiteral("pathtracer"));
+  }
+  if (ImGui::RadioButton("Debug", rendererMode == 3)) {
+    rendererMode = 3;
+    if (!currentRenderer_.startsWith("debug:"))
+      applyRendererSelection(QStringLiteral("debug:color"));
+  }
+  if (rendererMode == 3) {
+    static const char *debugLabels[] = {"color", "primID", "geomID", "Ns"};
+    int debugMode = 0;
+    const std::string debugName =
+        usingWorkerRenderPath() ? currentRenderer_.toStdString() : backend_.currentRenderer();
+    if (debugName == "debug:primID")
+      debugMode = 1;
+    else if (debugName == "debug:geomID")
+      debugMode = 2;
+    else if (debugName == "debug:Ns")
+      debugMode = 3;
+    if (ImGui::Combo("Debug Mode", &debugMode, debugLabels, IM_ARRAYSIZE(debugLabels))) {
+      applyRendererSelection(
+          QStringLiteral("debug:%1").arg(QString::fromUtf8(debugLabels[debugMode])));
+    }
   }
 
   ImGui::Separator();

@@ -23,6 +23,8 @@
 #include <thread>
 #include <unordered_map>
 
+#include "brlcad/rt/mater.h"
+
 // Declare ISPC-exported function addresses (generated from brlcad.ispc).
 // ISPC exports use C linkage; extern "C" inside namespace ispc maps
 // the C symbol to the ispc:: namespace for C++ call sites.
@@ -68,6 +70,22 @@ static inline int getNumThreads()
 }
 
 static constexpr bool kVerboseBRLCADLogging = false;
+
+static unsigned int currentContextInstID(const RTCIntersectFunctionNArguments *args)
+{
+  if (!args || !args->context)
+    return RTC_INVALID_GEOMETRY_ID;
+#if RTC_MAX_INSTANCE_LEVEL_COUNT > 1
+  if (args->context->instStackSize > 0)
+    return args->context->instID[args->context->instStackSize - 1];
+#endif
+  return args->context->instID[0];
+}
+
+static inline rkcommon::math::vec4f fallbackRegionColor()
+{
+  return rkcommon::math::vec4f(0.8f, 0.8f, 0.8f, 1.0f);
+}
 
 // ---------------------------------------------------------------------------
 // Embree ray-packet helpers
@@ -128,6 +146,7 @@ inline static void setRay(
   } else {
     RTCHitN_geomID(hitN, N, i) = RTC_INVALID_GEOMETRY_ID;
     RTCHitN_primID(hitN, N, i) = RTC_INVALID_GEOMETRY_ID;
+    RTCHitN_instID(hitN, N, i, 0) = hit.instID[0];
   }
 }
 
@@ -153,7 +172,11 @@ static int hitCallback(application *ap, partition *PartHeadp, seg * /*segs*/)
     hit.Ng_y = inormal[1];
     hit.Ng_z = inormal[2];
     hit.geomID = static_cast<unsigned int>(ap->a_user);
-    hit.primID = 0;
+    const region *region = pp->pt_regionp;
+    hit.primID =
+        (region && region->reg_bit >= 0)
+        ? static_cast<unsigned int>(region->reg_bit)
+        : 0u;
     return 1;
   }
 
@@ -265,7 +288,7 @@ extern "C" void brlcadIntersectN_C(void *self,
       rayhit.ray.flags = 0;
       rayhit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
       rayhit.hit.primID = RTC_INVALID_GEOMETRY_ID;
-      rayhit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
+      rayhit.hit.instID[0] = currentContextInstID(args);
 
       traceRay(*geom, rayhit, geomID);
 
@@ -278,6 +301,7 @@ extern "C" void brlcadIntersectN_C(void *self,
       if (!args->valid || args->valid[i]) {
         RTCRayHit rayhit;
         getRay(args->rayhit, N, i, rayhit);
+        rayhit.hit.instID[0] = currentContextInstID(args);
         traceRay(*geom, rayhit, geomID);
         setRay(rayhit, args->rayhit, N, i);
       }
@@ -293,6 +317,7 @@ BRLCAD::BRLCAD(api::ISPCDevice &device)
     : AddStructShared(device.getDRTDevice(), device, FFG_BOX)
 {
 #ifndef OSPRAY_TARGET_SYCL
+  getSh()->super.type = ispc::GEOMETRY_TYPE_UNKNOWN;
   getSh()->super.postIntersect =
       reinterpret_cast<ispc::Geometry_postIntersectFct>(
           ispc::BRLCAD_postIntersect_addr());
@@ -313,17 +338,28 @@ BRLCAD::~BRLCAD()
 
 size_t BRLCAD::numPrimitives() const
 {
-  return rtip ? 1 : 0;
+  return rtip ? std::max<size_t>(regionColors.size(), 1) : 0;
 }
 
 void BRLCAD::commit()
 {
+  getSh()->super.type = ispc::GEOMETRY_TYPE_UNKNOWN;
+#ifndef OSPRAY_TARGET_SYCL
+  getSh()->super.postIntersect =
+      reinterpret_cast<ispc::Geometry_postIntersectFct>(
+          ispc::BRLCAD_postIntersect_addr());
+  getSh()->super.intersect = reinterpret_cast<ispc::Geometry_IntersectFct>(
+      ispc::BRLCAD_intersect_addr());
+#endif
   if (rtip) {
     for (auto &res : resources)
       rt_clean_resource_complete(rtip, &res);
     rt_free_rti(rtip);
     rtip = nullptr;
   }
+  regionColors.clear();
+  regionMaterialRefs.clear();
+  regionMaterialShs.clear();
 
   const std::string filename = getParam<std::string>("filename", "");
   if (filename.empty())
@@ -362,6 +398,40 @@ void BRLCAD::commit()
   }
   rt_prep_parallel(rtip, nThreads);
 
+  regionColors.assign(std::max<size_t>(rtip->nregions, 1), fallbackRegionColor());
+  if (rtip->Regions && rtip->nregions > 0) {
+    for (size_t i = 0; i < rtip->nregions; ++i) {
+      region *reg = rtip->Regions[i];
+      if (!reg || reg->reg_bit < 0)
+        continue;
+
+      const size_t regBit = static_cast<size_t>(reg->reg_bit);
+      if (regBit >= regionColors.size())
+        regionColors.resize(regBit + 1, fallbackRegionColor());
+
+      rt_region_color_map(reg);
+      if (reg->reg_mater.ma_color_valid) {
+        regionColors[regBit] = rkcommon::math::vec4f(reg->reg_mater.ma_color[0],
+            reg->reg_mater.ma_color[1],
+            reg->reg_mater.ma_color[2],
+            1.0f);
+      }
+
+    }
+  }
+
+  regionMaterialRefs.reserve(regionColors.size());
+  regionMaterialShs.reserve(regionColors.size());
+  for (size_t i = 0; i < regionColors.size(); ++i) {
+    auto *material = new pathtracer::OBJMaterial(getISPCDevice());
+    material->setParam("kd",
+        rkcommon::math::vec3f(
+            regionColors[i].x, regionColors[i].y, regionColors[i].z));
+    material->commit();
+    regionMaterialRefs.emplace_back(material);
+    regionMaterialShs.push_back(reinterpret_cast<ispc::Material *>(material->getSh()));
+  }
+
   bounds.lower.x = rtip->mdl_min[0];
   bounds.lower.y = rtip->mdl_min[1];
   bounds.lower.z = rtip->mdl_min[2];
@@ -381,6 +451,16 @@ void BRLCAD::commit()
   }
 
   getSh()->brlcadSelf = this;
+  if (!regionColors.empty()) {
+    getSh()->regionColors.addr = reinterpret_cast<uint8_t *>(regionColors.data());
+    getSh()->regionColors.byteStride = sizeof(rkcommon::math::vec4f);
+    getSh()->regionColors.numItems = static_cast<uint32_t>(regionColors.size());
+    getSh()->regionColors.huge = false;
+  } else {
+    getSh()->regionColors = ispc::Data1D{nullptr, 0, 0, false};
+  }
+  getSh()->materials = regionMaterialShs.empty() ? nullptr : regionMaterialShs.data();
+  getSh()->numMaterials = static_cast<uint32_t>(regionMaterialShs.size());
   createEmbreeUserGeometry((RTCBoundsFunction)brlcadBounds);
 
   getSh()->super.numPrimitives = static_cast<int>(numPrimitives());

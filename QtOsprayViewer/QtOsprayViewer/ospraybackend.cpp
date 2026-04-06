@@ -6,6 +6,11 @@
 #include <cstring>
 #include <exception>
 #include <stdexcept>
+#include <cstdio>
+#include <cstdarg>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include <ospray/ospray.h>
 #define TINYOBJLOADER_IMPLEMENTATION
@@ -23,6 +28,105 @@ using rkcommon::math::vec3ui;
 using rkcommon::math::vec4f;
 
 namespace {
+const char *kStartupBrlcadPath = "C:/brlcad-build/share/db/moss.g";
+const char *kStartupBrlcadObject = "all.g";
+
+std::string runtimeDirectory()
+{
+#ifdef _WIN32
+  char modulePath[MAX_PATH] = {};
+  if (GetModuleFileNameA(nullptr, modulePath, MAX_PATH) > 0) {
+    std::string path(modulePath);
+    const size_t slash = path.find_last_of("\\/");
+    if (slash != std::string::npos) {
+      path.resize(slash + 1);
+      return path;
+    }
+  }
+#endif
+  return {};
+}
+
+std::string runtimeLogPath(const char *filename)
+{
+  std::string dir = runtimeDirectory();
+  if (dir.empty())
+    return {};
+  dir += filename;
+  return dir;
+}
+
+std::string processTag()
+{
+#ifdef _WIN32
+  char modulePath[MAX_PATH] = {};
+  if (GetModuleFileNameA(nullptr, modulePath, MAX_PATH) > 0) {
+    const char *base = modulePath;
+    if (const char *slash = strrchr(modulePath, '\\'))
+      base = slash + 1;
+    return std::string(base) + " pid=" + std::to_string(GetCurrentProcessId());
+  }
+#endif
+  return "process";
+}
+
+void resetBrlcadDebugLogs()
+{
+  static const char *kLogFiles[] = {"brlcad_color_debug.log",
+      "scivis_surface_debug.log",
+      "geometricmodel_debug.log"};
+  for (const char *filename : kLogFiles) {
+    const std::string path = runtimeLogPath(filename);
+    if (path.empty())
+      continue;
+    if (FILE *logFile = fopen(path.c_str(), "w"))
+      fclose(logFile);
+  }
+}
+
+void logBrlcadDebug(const char *fmt, ...)
+{
+  char body[1024];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(body, sizeof(body), fmt, args);
+  va_end(args);
+
+  std::string message =
+      "[" + processTag() + "] " + std::string(body);
+
+#ifdef _WIN32
+  const std::string logPath = runtimeLogPath("brlcad_color_debug.log");
+  if (!logPath.empty()) {
+    if (FILE *logFile = fopen(logPath.c_str(), "a")) {
+      fputs(message.c_str(), logFile);
+      fclose(logFile);
+    }
+  }
+#endif
+
+  fputs(message.c_str(), stderr);
+}
+
+void logLoadedModulePath(const char *dllName)
+{
+#ifdef _WIN32
+  HMODULE module = GetModuleHandleA(dllName);
+  if (!module) {
+    logBrlcadDebug("Loaded module '%s': <not loaded>\n", dllName);
+    return;
+  }
+
+  char path[MAX_PATH] = {};
+  if (GetModuleFileNameA(module, path, MAX_PATH) > 0)
+    logBrlcadDebug("Loaded module '%s': %s\n", dllName, path);
+  else
+    logBrlcadDebug("Loaded module '%s': <path unavailable>\n", dllName);
+#else
+  (void)dllName;
+#endif
+}
+
 std::string trimCopy(const std::string &value)
 {
   const auto first = value.find_first_not_of(" \t\r\n");
@@ -31,6 +135,114 @@ std::string trimCopy(const std::string &value)
 
   const auto last = value.find_last_not_of(" \t\r\n");
   return value.substr(first, last - first + 1);
+}
+
+struct BrlcadRegionAppearance
+{
+  std::vector<vec4f> colors;
+  std::vector<ospray::cpp::Material> materials;
+};
+
+std::optional<BrlcadRegionAppearance> buildBrlcadRegionAppearance(
+    const std::string &path, const std::string &topObject)
+{
+  logBrlcadDebug("appearance: begin path='%s' object='%s'\n",
+      path.c_str(),
+      topObject.c_str());
+  rt_i *rtip = rt_dirbuild(path.c_str(), nullptr, 0);
+  if (!rtip) {
+    logBrlcadDebug("appearance: rt_dirbuild failed\n");
+    return std::nullopt;
+  }
+  logBrlcadDebug("appearance: rt_dirbuild ok nregions=%zu\n", size_t(rtip->nregions));
+
+  std::string objectName = topObject.empty() ? "all" : topObject;
+  const char *object = objectName.c_str();
+  if (rt_gettrees(rtip, 1, &object, 1) < 0) {
+    logBrlcadDebug("appearance: rt_gettrees failed for '%s'\n", object);
+    rt_free_rti(rtip);
+    return std::nullopt;
+  }
+  logBrlcadDebug("appearance: rt_gettrees ok\n");
+
+  rt_prep_parallel(rtip, 1);
+  logBrlcadDebug("appearance: rt_prep_parallel ok\n");
+
+  size_t slotCount = 1;
+  if (rtip->Regions && rtip->nregions > 0) {
+    for (size_t i = 0; i < rtip->nregions; ++i) {
+      const region *reg = rtip->Regions[i];
+      if (reg && reg->reg_bit >= 0)
+        slotCount = std::max(slotCount, size_t(reg->reg_bit) + 1);
+    }
+  }
+  logBrlcadDebug("appearance: slotCount=%zu\n", slotCount);
+
+  BrlcadRegionAppearance appearance;
+  appearance.colors.assign(slotCount, vec4f(0.8f, 0.8f, 0.8f, 1.0f));
+  size_t validColorCount = 0;
+
+  if (rtip->Regions && rtip->nregions > 0) {
+    for (size_t i = 0; i < rtip->nregions; ++i) {
+      region *reg = rtip->Regions[i];
+      if (!reg || reg->reg_bit < 0)
+        continue;
+
+      rt_region_color_map(reg);
+      if (!reg->reg_mater.ma_color_valid)
+        continue;
+
+      const size_t slot = size_t(reg->reg_bit);
+      appearance.colors[slot] = vec4f(reg->reg_mater.ma_color[0],
+          reg->reg_mater.ma_color[1],
+          reg->reg_mater.ma_color[2],
+          1.0f);
+      logBrlcadDebug("appearance: slot=%zu color=(%.3f, %.3f, %.3f)\n",
+          slot,
+          reg->reg_mater.ma_color[0],
+          reg->reg_mater.ma_color[1],
+          reg->reg_mater.ma_color[2]);
+      ++validColorCount;
+    }
+  }
+  logBrlcadDebug("appearance: validColorCount=%zu\n", validColorCount);
+
+  appearance.materials.reserve(appearance.colors.size());
+  for (const auto &color : appearance.colors) {
+    ospray::cpp::Material material("obj");
+    material.setParam("kd", vec3f(color.x, color.y, color.z));
+    material.commit();
+    appearance.materials.push_back(material);
+  }
+  logBrlcadDebug("appearance: created %zu materials\n", appearance.materials.size());
+
+  rt_free_rti(rtip);
+  logBrlcadDebug("appearance: finished\n");
+  return appearance;
+}
+
+void configureRendererInstance(ospray::cpp::Renderer &renderer,
+    const std::string &requestedType,
+    int pixelSamples,
+    int aoSamples)
+{
+  const std::string debugPrefix = "debug:";
+  std::string rendererType = requestedType;
+  std::string debugMethod;
+  if (requestedType.rfind(debugPrefix, 0) == 0) {
+    rendererType = "debug";
+    debugMethod = requestedType.substr(debugPrefix.size());
+    if (debugMethod.empty())
+      debugMethod = "color";
+  }
+
+  renderer = ospray::cpp::Renderer(rendererType);
+  renderer.setParam("backgroundColor", 1.0f);
+  renderer.setParam("pixelSamples", pixelSamples);
+  renderer.setParam("aoSamples", aoSamples);
+  if (!debugMethod.empty())
+    renderer.setParam("method", debugMethod);
+  renderer.commit();
 }
 
 bool ensureBrlcadModuleLoaded(std::string &errorOut)
@@ -42,6 +254,8 @@ bool ensureBrlcadModuleLoaded(std::string &errorOut)
   if (!attempted) {
     attempted = true;
     loaded = (ospLoadModule("brl_cad") == OSP_NO_ERROR);
+    logLoadedModulePath("ospray_module_brl_cad.dll");
+    logLoadedModulePath("ospray_module_cpu.dll");
     if (!loaded) {
       loadError =
           "Failed to load BRL-CAD OSPRay module 'brl_cad'. Ensure "
@@ -55,6 +269,7 @@ bool ensureBrlcadModuleLoaded(std::string &errorOut)
 
   return loaded;
 }
+
 }
 
 void OsprayBackend::init()
@@ -74,7 +289,6 @@ void OsprayBackend::init()
     updateCameraCrop(vec2f(0.f, 0.f), vec2f(1.f, 1.f));
     camera_.commit();
     cameraDirty_ = false;
-
     loadTestMesh();
   } catch (const std::exception &e) {
     setError(e.what());
@@ -251,6 +465,8 @@ float OsprayBackend::getBoundsRadius() const
 
 void OsprayBackend::loadTestMesh()
 {
+  brlcadColorData_ = ospray::cpp::CopiedData();
+  brlcadMaterialData_ = ospray::cpp::CopiedData();
   std::vector<vec3f> vertex = {vec3f(-1.0f, -1.0f, 3.0f),
       vec3f(-1.0f, 1.0f, 3.0f),
       vec3f(1.0f, -1.0f, 3.0f),
@@ -319,6 +535,8 @@ bool OsprayBackend::loadObj(const std::string &path)
   }
 
   lastError_.clear();
+  brlcadColorData_ = ospray::cpp::CopiedData();
+  brlcadMaterialData_ = ospray::cpp::CopiedData();
   try {
     tinyobj::ObjReader reader;
     tinyobj::ObjReaderConfig config;
@@ -446,7 +664,11 @@ bool OsprayBackend::loadBrlcad(
   }
 
   lastError_.clear();
+  brlcadColorData_ = ospray::cpp::CopiedData();
+  brlcadMaterialData_ = ospray::cpp::CopiedData();
   try {
+  resetBrlcadDebugLogs();
+  logBrlcadDebug("----- BRL-CAD load begin -----\n");
   std::string moduleError;
   if (!ensureBrlcadModuleLoaded(moduleError)) {
     setError(moduleError);
@@ -456,6 +678,10 @@ bool OsprayBackend::loadBrlcad(
   fprintf(stderr, "loadBrlcad: START\n");
   fprintf(stderr, "loadBrlcad: path = %s\n", path.c_str());
   fprintf(stderr, "loadBrlcad: object = %s\n", topObject.c_str());
+
+  logBrlcadDebug("loadBrlcad: building appearance\n");
+  const auto appearance = buildBrlcadRegionAppearance(path, topObject);
+  logBrlcadDebug("loadBrlcad: appearance ready hasAppearance=%d\n", appearance.has_value() ? 1 : 0);
 
   // STEP 1: Create geometry
   fprintf(stderr, "STEP 1: Creating OSPRay brlcad geometry\n");
@@ -492,6 +718,12 @@ bool OsprayBackend::loadBrlcad(
 
   fprintf(stderr, "STEP 11: Creating GeometricModel\n");
   ospray::cpp::GeometricModel gmodel(geom);
+  if (appearance) {
+    brlcadColorData_ = ospray::cpp::CopiedData(appearance->colors);
+    brlcadMaterialData_ = ospray::cpp::CopiedData(appearance->materials);
+    gmodel.setParam("color", brlcadColorData_);
+    gmodel.setParam("material", brlcadMaterialData_);
+  }
   gmodel.commit();
 
   fprintf(stderr, "STEP 12: Creating Group\n");
@@ -575,13 +807,11 @@ void OsprayBackend::setRenderer(const std::string &type)
   }
 
   try {
-    renderer_ = ospray::cpp::Renderer(type);
+    configureRendererInstance(renderer_,
+        type,
+        configuredPixelSamplesForCurrentMode(),
+        configuredAoSamplesForCurrentMode());
     currentRenderer_ = type;
-
-    renderer_.setParam("backgroundColor", 1.0f);
-    renderer_.setParam("pixelSamples", configuredPixelSamplesForCurrentMode());
-    renderer_.setParam("aoSamples", configuredAoSamplesForCurrentMode());
-    renderer_.commit();
     appliedAoSamples_ = configuredAoSamplesForCurrentMode();
     appliedPixelSamples_ = configuredPixelSamplesForCurrentMode();
 
@@ -1092,12 +1322,11 @@ void OsprayBackend::applyPendingState()
   }
 
   if (pendingRendererType_) {
-    renderer_ = ospray::cpp::Renderer(*pendingRendererType_);
+    configureRendererInstance(renderer_,
+        *pendingRendererType_,
+        configuredPixelSamplesForCurrentMode(),
+        configuredAoSamplesForCurrentMode());
     currentRenderer_ = *pendingRendererType_;
-    renderer_.setParam("backgroundColor", 1.0f);
-    renderer_.setParam("pixelSamples", configuredPixelSamplesForCurrentMode());
-    renderer_.setParam("aoSamples", configuredAoSamplesForCurrentMode());
-    renderer_.commit();
     appliedAoSamples_ = configuredAoSamplesForCurrentMode();
     appliedPixelSamples_ = configuredPixelSamplesForCurrentMode();
     pendingRendererType_.reset();

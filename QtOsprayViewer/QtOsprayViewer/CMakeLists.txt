@@ -56,17 +56,38 @@ set(BRLCAD_OSPRAY_MODULE_DLL "" CACHE FILEPATH
 set(BRLCAD_OSPRAY_MODULE_DEPLOY_DIR "" CACHE PATH
     "Optional directory with extra DLL dependencies for ospray_module_brl_cad.dll")
 
-if(WIN32 AND NOT BRLCAD_OSPRAY_MODULE_DLL)
-    foreach(_candidate
-            "${OSPRAY_PREFIX}/bin/ospray_module_brl_cad.dll"
-            "${BRLCAD_PREFIX}/bin/ospray_module_brl_cad.dll")
-        if(EXISTS "${_candidate}")
-            set(BRLCAD_OSPRAY_MODULE_DLL "${_candidate}" CACHE FILEPATH
-                "Path to ospray_module_brl_cad.dll (optional; auto-detected from known bin dirs if unset)"
-                FORCE)
-            break()
+if(WIN32)
+    set(_brlcad_module_auto_candidates
+        "${CMAKE_SOURCE_DIR}/../../bcs/Debug/ospray_module_brl_cad.dll"
+        "${CMAKE_SOURCE_DIR}/../../bcs/Release/ospray_module_brl_cad.dll"
+        "${OSPRAY_PREFIX}/bin/ospray_module_brl_cad.dll"
+        "${BRLCAD_PREFIX}/bin/ospray_module_brl_cad.dll")
+
+    set(_should_refresh_brlcad_module_path OFF)
+    if(NOT BRLCAD_OSPRAY_MODULE_DLL OR NOT EXISTS "${BRLCAD_OSPRAY_MODULE_DLL}")
+        set(_should_refresh_brlcad_module_path ON)
+    else()
+        get_filename_component(_brlcad_module_name "${BRLCAD_OSPRAY_MODULE_DLL}" NAME)
+        if(_brlcad_module_name STREQUAL "ospray_module_brl_cad.dll")
+            foreach(_preferred_candidate IN LISTS _brlcad_module_auto_candidates)
+                if(EXISTS "${_preferred_candidate}" AND NOT BRLCAD_OSPRAY_MODULE_DLL STREQUAL "${_preferred_candidate}")
+                    set(_should_refresh_brlcad_module_path ON)
+                    break()
+                endif()
+            endforeach()
         endif()
-    endforeach()
+    endif()
+
+    if(_should_refresh_brlcad_module_path)
+        foreach(_candidate IN LISTS _brlcad_module_auto_candidates)
+            if(EXISTS "${_candidate}")
+                set(BRLCAD_OSPRAY_MODULE_DLL "${_candidate}" CACHE FILEPATH
+                    "Path to ospray_module_brl_cad.dll (optional; auto-detected from known bin dirs if unset)"
+                    FORCE)
+                break()
+            endif()
+        endforeach()
+    endif()
 endif()
 
 find_path(BRLCAD_INCLUDE_DIR brlcad/rt/db4.h PATHS "${BRLCAD_PREFIX}/include" REQUIRED)
@@ -150,6 +171,8 @@ target_link_libraries(IBRTRenderWorker PRIVATE
 )
 
 if(WIN32)
+    set(TBB_REDIST_DIR "${TBB_ROOT}/redist/intel64/vc14")
+
     add_custom_command(TARGET IBRTRenderWorker POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${OSPRAY_PREFIX}/bin"
@@ -179,6 +202,14 @@ if(WIN32)
             "${BRLCAD_PREFIX}/bin"
             "$<TARGET_FILE_DIR:IBRTRenderWorker>"
         COMMENT "Copying BRL-CAD runtime DLLs for worker...")
+
+    if(EXISTS "${TBB_REDIST_DIR}")
+        add_custom_command(TARGET IBRTRenderWorker POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${TBB_REDIST_DIR}"
+                "$<TARGET_FILE_DIR:IBRTRenderWorker>"
+            COMMENT "Copying TBB runtime DLLs for worker...")
+    endif()
 
     if(BRLCAD_OSPRAY_MODULE_DLL AND EXISTS "${BRLCAD_OSPRAY_MODULE_DLL}")
         add_custom_command(TARGET IBRTRenderWorker POST_BUILD
@@ -235,6 +266,14 @@ if(WIN32)
             "${BRLCAD_PREFIX}/bin"
             "$<TARGET_FILE_DIR:QtOsprayViewer>"
         COMMENT "Copying BRL-CAD runtime DLLs...")
+
+    if(EXISTS "${TBB_REDIST_DIR}")
+        add_custom_command(TARGET QtOsprayViewer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${TBB_REDIST_DIR}"
+                "$<TARGET_FILE_DIR:QtOsprayViewer>"
+            COMMENT "Copying TBB runtime DLLs...")
+    endif()
 
     if(BRLCAD_OSPRAY_MODULE_DLL AND EXISTS "${BRLCAD_OSPRAY_MODULE_DLL}")
         add_custom_command(TARGET QtOsprayViewer POST_BUILD

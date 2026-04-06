@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <string>
 
 #include <ospray/ospray_cpp/ext/rkcommon.h>
 
@@ -83,6 +84,9 @@ class RenderWorkerClient : public QObject
   void workerConnectionChanged(bool connected);
 
  private:
+  QString messageTypeLabel(uint32_t type) const;
+  void appendProcessOutput(const QByteArray &data);
+  QString buildDisconnectedError(const QString &contextMessage) const;
 #ifdef _WIN32
   bool connectPipe();
   bool sendPing();
@@ -97,6 +101,7 @@ class RenderWorkerClient : public QObject
   QString workerPath_;
   QString pipeName_;
   QString lastError_;
+  QString workerOutputTail_;
   uint64_t nextRequestId_ = 2;
   mutable std::mutex requestMutex_;
 };

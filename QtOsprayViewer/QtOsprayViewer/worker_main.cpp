@@ -90,6 +90,9 @@ int main(int argc, char *argv[])
     return 1;
   }
 
+  // Keep the UI responsive when heavy scenes fully occupy the CPU.
+  SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
+
   HANDLE pipe = CreateNamedPipeA(pipeName.c_str(),
       PIPE_ACCESS_DUPLEX,
       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,

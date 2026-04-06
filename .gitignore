@@ -65,3 +65,9 @@ imgui.ini
 # Visual Studio local database/cache files
 *.VC.db
 *.VC.opendb
+
+# Local probes / crash artifacts
+/tmp_*
+/worker_*.obj
+/(BRL-CAD)-*-bomb.log
+/IBRT_crash_*.dmp

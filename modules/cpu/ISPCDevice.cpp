@@ -40,6 +40,11 @@ namespace api {
 
 using SetParamFcn = void(OSPObject, const char *, const void *);
 
+static inline const char *safeCString(const char *str)
+{
+  return str ? str : "";
+}
+
 template <typename T>
 static void setParamOnObject(OSPObject _obj, const char *p, const T &v)
 {
@@ -66,7 +71,7 @@ static void setParamOnObject(OSPObject _obj, const char *p, const T &v)
   {                                                                            \
     OSPTypeFor<TYPE>::value, [](OSPObject o, const char *p, const void *v) {   \
       const char *str = (const char *)v;                                       \
-      setParamOnObject(o, p, std::string(str));                                \
+      setParamOnObject(o, p, std::string(safeCString(str)));                   \
     }                                                                          \
   }
 
@@ -187,7 +192,7 @@ ISPCDevice::~ISPCDevice()
 static void embreeErrorFunc(void *, const RTCError code, const char *str)
 {
   const std::string msg = std::string("Embree internal error ")
-      + rtcGetErrorString(code) + " : " + str;
+      + safeCString(rtcGetErrorString(code)) + " : " + safeCString(str);
   postStatusMsg() << "#osp: Embree internal error " << msg;
   OSPError e =
       (code > RTC_ERROR_UNSUPPORTED_CPU) ? OSP_UNKNOWN_ERROR : (OSPError)code;
@@ -197,10 +202,12 @@ static void embreeErrorFunc(void *, const RTCError code, const char *str)
 #ifdef OSPRAY_ENABLE_VOLUMES
 static void vklErrorFunc(void *, const VKLError code, const char *str)
 {
-  postStatusMsg() << "#osp: Open VKL internal error " << code << " : " << str;
+  postStatusMsg() << "#osp: Open VKL internal error " << code << " : "
+                  << safeCString(str);
   OSPError e =
       (code > VKL_UNSUPPORTED_CPU) ? OSP_UNKNOWN_ERROR : (OSPError)code;
-  handleError(e, "Open VKL internal error '" + std::string(str) + "'");
+  handleError(
+      e, "Open VKL internal error '" + std::string(safeCString(str)) + "'");
 }
 #endif
 

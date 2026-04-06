@@ -5,7 +5,6 @@
 
 #include "Geometry.ih"
 #include "GeometryDispatch.ih"
-#include "common/Data.ih"
 #include "common/FeatureFlagsEnum.h"
 #include "render/Renderer.ih"
 #include "rkcommon/math/AffineSpace.ih"
@@ -54,7 +53,6 @@ inline void GeometricModel_postIntersect(const GeometricModel *uniform self,
   Geometry *uniform geom = self->geom;
 
   Geometry_dispatch_postIntersect(geom, dg, ray, flags, ffh);
-
   dg.areaPDF = self->areaPDF;
   dg.objID =
       (self->userID == RTC_INVALID_GEOMETRY_ID) ? ray.geomID : self->userID;
@@ -67,7 +65,7 @@ inline void GeometricModel_postIntersect(const GeometricModel *uniform self,
     dg.color = get_vec4f(self->color, min(idx, self->color.numItems - 1));
   }
 
-  if (renderer) {
+  if (renderer && (self->material || self->materialID)) {
     dg.material = GeometricModel_getMaterial(self, renderer, ray.primID);
   }
 

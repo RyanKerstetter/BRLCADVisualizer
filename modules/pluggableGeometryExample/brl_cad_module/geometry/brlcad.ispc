@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/DifferentialGeometry.ih"
+#include "common/Data.ih"
 #include "common/Ray.ih"
 // c++ shared
 #include "BRLCADShared.h"
@@ -11,12 +12,23 @@ OSPRAY_BEGIN_ISPC_NAMESPACE
 // postIntersect: called by Geometry_dispatch_postIntersect for GEOMETRY_TYPE_UNKNOWN.
 // Fill dg.Ng and dg.Ns from the intersection normal stored in ray.Ng.
 // Normalization and face-forwarding are handled by OSPRay's World::postIntersect.
-SYCL_EXTERNAL void BRLCAD_postIntersect(const Geometry *uniform,
+SYCL_EXTERNAL void BRLCAD_postIntersect(const Geometry *uniform _self,
     varying DifferentialGeometry &dg,
     const varying Ray &ray,
-    uniform int64)
+    uniform int64 flags)
 {
+  const BRLCAD_sh *uniform self = (const BRLCAD_sh *uniform)_self;
   dg.Ng = dg.Ns = ray.Ng;
+  if (flags & DG_COLOR) {
+    dg.color = make_vec4f(0.8f, 0.8f, 0.8f, 1.0f);
+    if (valid(self->regionColors) && self->regionColors.numItems > 0) {
+      dg.color = get_vec4f(
+          self->regionColors, min(ray.primID, self->regionColors.numItems - 1));
+    }
+  }
+  if (self->materials != NULL && self->numMaterials > 0) {
+    dg.material = self->materials[min(ray.primID, self->numMaterials - 1)];
+  }
 }
 
 export void *uniform BRLCAD_postIntersect_addr()

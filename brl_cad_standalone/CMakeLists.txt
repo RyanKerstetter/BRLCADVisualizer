@@ -42,6 +42,7 @@ include_directories_ispc(
   "${OSPRAY_PREFIX}/include/ospray/SDK/modules/cpu"
   "${RKCOMMON_INCLUDE_DIRS}"
   "${EMBREE_PREFIX}/include"
+  "${OPENVKL_PREFIX}/include"
   # BRLCADShared.h is included as "BRLCADShared.h" from the geometry/ dir
   "${CMAKE_CURRENT_SOURCE_DIR}/../modules/pluggableGeometryExample/brl_cad_module/geometry"
 )
@@ -52,6 +53,10 @@ add_definitions_ispc(
   -DOSPRAY_END_ISPC_NAMESPACE=
   -DSYCL_EXTERNAL=
 )
+
+# The BRL-CAD geometry shared struct embeds OSPRay's Geometry enum/layout.
+# Keep this plugin ABI-aligned with the active CPU runtime build.
+add_definitions_ispc(-DOSPRAY_ENABLE_VOLUMES)
 
 # ---- BRL-CAD ----
 # Pass via -DBRLCAD_PREFIX=<path> at configure time.
@@ -70,9 +75,11 @@ set(MODULE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../modules/pluggableGeometryExample/
 add_library(ospray_module_brl_cad SHARED
     "${MODULE_DIR}/geometry/brlcad.cpp"
     "${MODULE_DIR}/moduleInit.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../modules/cpu/render/materials/OBJ.cpp"
 )
 
-target_compile_definitions(ospray_module_brl_cad PRIVATE OBJECTFACTORY_IMPORT)
+target_compile_definitions(
+    ospray_module_brl_cad PRIVATE OBJECTFACTORY_IMPORT OSPRAY_ENABLE_VOLUMES)
 
 # Compile brlcad.ispc and add resulting objects to the library.
 # ispc_compile prepends CMAKE_CURRENT_SOURCE_DIR, so pass a relative path.
@@ -80,7 +87,14 @@ file(RELATIVE_PATH BRLCAD_ISPC_REL
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${MODULE_DIR}/geometry/brlcad.ispc"
 )
-ispc_target_add_sources(ospray_module_brl_cad "${BRLCAD_ISPC_REL}")
+file(RELATIVE_PATH OBJ_MATERIAL_ISPC_REL
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../modules/cpu/render/materials/OBJ.ispc"
+)
+ispc_target_add_sources(
+    ospray_module_brl_cad
+    "${BRLCAD_ISPC_REL}"
+    "${OBJ_MATERIAL_ISPC_REL}")
 
 target_include_directories(ospray_module_brl_cad PRIVATE
     "${MODULE_DIR}"
