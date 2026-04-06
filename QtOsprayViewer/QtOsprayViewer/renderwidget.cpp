@@ -158,13 +158,27 @@ void RenderWidget::syncFlyFromOrbit()
 
 void RenderWidget::syncOrbitFromFly()
 {
-  vec3f forward = forwardFromAngles(flyYaw_, flyPitch_);
-  forward = normalizeVec(forward);
-
   vec3f eye = flyPos_;
-  center_ = vec3f(eye.x + forward.x * dist_,
-      eye.y + forward.y * dist_,
-      eye.z + forward.z * dist_);
+  vec3f target = center_;
+  vec3f offset(
+      eye.x - target.x, eye.y - target.y, eye.z - target.z);
+  const float radius =
+      std::sqrt(offset.x * offset.x + offset.y * offset.y + offset.z * offset.z);
+
+  // Preserve the existing orbit target when leaving fly mode. If it is
+  // degenerate, fall back to the scene center instead of adopting the current
+  // fly look direction as a new pivot.
+  if (radius <= 1e-4f) {
+    center_ = sceneBoundsCenter();
+    offset = vec3f(eye.x - center_.x, eye.y - center_.y, eye.z - center_.z);
+    const float fallbackRadius =
+        std::sqrt(offset.x * offset.x + offset.y * offset.y + offset.z * offset.z);
+    if (fallbackRadius <= 1e-4f) {
+      const float maxExtent = std::max(sceneBoundsMaxExtent(), 1.0f);
+      center_ = vec3f(eye.x, eye.y, eye.z - maxExtent);
+    }
+  }
+
   setOrbitFromEyePosition(eye);
 }
 
@@ -237,6 +251,9 @@ bool RenderWidget::projectWorldToScreen(const vec3f &worldPos, QPointF &screenPo
 
 void RenderWidget::drawRotationAxisOverlay(QPainter &p)
 {
+  if (inputMode_ != InputMode::Orbit)
+    return;
+
   QPointF origin;
   if (!projectWorldToScreen(center_, origin))
     return;
@@ -859,20 +876,18 @@ void RenderWidget::paintGL()
     resetView();
   }
 
-  static int mode = 0;
-  if (ImGui::RadioButton("Orbit", mode == 0)) {
-    mode = 0;
+  const bool orbitMode = inputMode_ == InputMode::Orbit;
+  if (ImGui::RadioButton("Orbit", orbitMode)) {
     setInputMode(InputMode::Orbit);
   }
-  if (ImGui::RadioButton("Fly", mode == 1)) {
-    mode = 1;
+  if (ImGui::RadioButton("Fly", !orbitMode)) {
     setInputMode(InputMode::Fly);
   }
 
   ImGui::Separator();
   ImGui::Text("Controls");
   ImGui::PushTextWrapPos(0.0f);
-  if (mode == 0) {
+  if (orbitMode) {
     ImGui::BulletText("Orbit: LMB rotate, RMB pan, wheel zoom");
     ImGui::BulletText("Shift + drag: Translate");
     ImGui::BulletText("Ctrl + drag: Rotate");
@@ -1070,6 +1085,7 @@ void RenderWidget::setInputMode(InputMode mode)
 {
   if (sceneLoadInProgress_.load()) {
     inputMode_ = mode;
+    emit inputModeChanged(inputMode_);
     update();
     return;
   }
@@ -1084,6 +1100,7 @@ void RenderWidget::setInputMode(InputMode mode)
   }
 
   inputMode_ = mode;
+  emit inputModeChanged(inputMode_);
 
   resetAccumulationTargets();
   syncCameraToBackend();
@@ -1277,10 +1294,8 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
     beginInteraction();
 
   if (e->key() == Qt::Key_Tab) {
-    inputMode_ =
-        (inputMode_ == InputMode::Orbit) ? InputMode::Fly : InputMode::Orbit;
-    syncCameraToBackend();
-    renderOnce();
+    setInputMode(
+        (inputMode_ == InputMode::Orbit) ? InputMode::Fly : InputMode::Orbit);
     scheduleInteractionEnd();
     return;
   }
@@ -1391,18 +1406,8 @@ void RenderWidget::setUpAxis(UpAxis axis)
   if (axis == upAxis_)
     return;
 
-  const vec3f orbitEye = currentCameraPosition();
   upAxis_ = axis;
-  if (inputMode_ == InputMode::Orbit) {
-    setOrbitFromEyePosition(orbitEye);
-    syncFlyFromOrbit();
-  } else {
-    syncOrbitFromFly();
-  }
-
-  resetAccumulationTargets();
-  syncCameraToBackend();
-  renderOnce();
+  resetView();
 }
 
 RenderWidget::UpAxis RenderWidget::upAxis() const

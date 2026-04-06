@@ -56,6 +56,24 @@ bool ensureBrlcadModuleLoaded(std::string &errorOut)
 
   return loaded;
 }
+
+std::vector<ospray::cpp::Light> makeDefaultLights()
+{
+  std::vector<ospray::cpp::Light> lights;
+
+  ospray::cpp::Light ambient("ambient");
+  ambient.setParam("intensity", 0.25f);
+  ambient.commit();
+  lights.push_back(ambient);
+
+  ospray::cpp::Light distant("distant");
+  distant.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
+  distant.setParam("intensity", 3.0f);
+  distant.commit();
+  lights.push_back(distant);
+
+  return lights;
+}
 }
 
 void OsprayBackend::init()
@@ -311,21 +329,7 @@ void OsprayBackend::loadTestMesh()
 
   world_ = ospray::cpp::World();
   world_.setParam("instance", ospray::cpp::CopiedData(instance));
-
- std::vector<ospray::cpp::Light> lights;
-
-  ospray::cpp::Light ambient("ambient");
-  ambient.setParam("intensity", 0.25f);
-  ambient.commit();
-  lights.push_back(ambient);
-
-  ospray::cpp::Light distant("distant");
-  distant.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
-  distant.setParam("intensity", 3.0f);
-  distant.commit();
-  lights.push_back(distant);
-
-  world_.setParam("light", ospray::cpp::CopiedData(lights));
+  applyDefaultLights();
   world_.commit();
 
   resetAccumulation();
@@ -428,21 +432,7 @@ bool OsprayBackend::loadObj(const std::string &path)
 
     world_ = ospray::cpp::World();
     world_.setParam("instance", ospray::cpp::CopiedData(instance));
-
-    std::vector<ospray::cpp::Light> lights;
-
-    ospray::cpp::Light ambient("ambient");
-    ambient.setParam("intensity", 0.25f);
-    ambient.commit();
-    lights.push_back(ambient);
-
-    ospray::cpp::Light distant("distant");
-    distant.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
-    distant.setParam("intensity", 3.0f);
-    distant.commit();
-    lights.push_back(distant);
-
-    world_.setParam("light", ospray::cpp::CopiedData(lights));
+    applyDefaultLights();
     world_.commit();
 
     resetAccumulation();
@@ -532,19 +522,7 @@ bool OsprayBackend::loadBrlcad(
   world_.setParam("instance", ospray::cpp::CopiedData(instance));
 
   fprintf(stderr, "STEP 15: Adding light\n");
-  std::vector<ospray::cpp::Light> lights;
-
-  ospray::cpp::Light ambient("ambient");
-  ambient.setParam("intensity", 0.25f);
-  ambient.commit();
-  lights.push_back(ambient);
-
-  ospray::cpp::Light distant("distant");
-  distant.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
-  distant.setParam("intensity", 3.0f);
-  distant.commit();
-  lights.push_back(distant);
-  world_.setParam("light", ospray::cpp::CopiedData(lights));
+  applyDefaultLights();
 
   fprintf(stderr, "STEP 16: Commit world\n");
   world_.commit();
@@ -1033,6 +1011,11 @@ void OsprayBackend::setProgressiveScale(int scale)
     passPixels_.assign(size_t(passW_) * size_t(passH_), 0u);
     passFb_ = ospray::cpp::FrameBuffer();
   }
+}
+
+void OsprayBackend::applyDefaultLights()
+{
+  world_.setParam("light", ospray::cpp::CopiedData(makeDefaultLights()));
 }
 
 void OsprayBackend::resetProgressiveState(bool clearDisplay)

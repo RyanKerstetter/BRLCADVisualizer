@@ -65,11 +65,12 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   void replayWorkerState();
 
   void setObjectTransform(const rkcommon::math::affine3f &xfm);
-  rkcommon::math::affine3f objectTransform() const;
+ rkcommon::math::affine3f objectTransform() const;
   rkcommon::math::affine3f objectTransform_{rkcommon::math::one};
 
  signals:
   void sceneLoadFinished(bool success, const QString &errorMessage);
+  void inputModeChanged(RenderWidget::InputMode mode);
 
   
 

@@ -95,12 +95,17 @@ void MainWindow::setupMenus()
   QMenu *brlcadMenu = menuBar()->addMenu("&Select Model");
   QMenu *demoMenu = fileMenu->addMenu("&Demo Models");
 
-  QAction *orbitModeAction = new QAction("Orbit Mode", this);
-  orbitModeAction->setCheckable(true);
-  orbitModeAction->setChecked(true);
+  orbitModeAction_ = new QAction("Orbit Mode", this);
+  orbitModeAction_->setCheckable(true);
+  orbitModeAction_->setChecked(true);
 
-  QAction *flyModeAction = new QAction("Fly Mode", this);
-  flyModeAction->setCheckable(true);
+  flyModeAction_ = new QAction("Fly Mode", this);
+  flyModeAction_->setCheckable(true);
+
+  QActionGroup *inputModeGroup = new QActionGroup(this);
+  inputModeGroup->setExclusive(true);
+  inputModeGroup->addAction(orbitModeAction_);
+  inputModeGroup->addAction(flyModeAction_);
 
   QActionGroup *upAxisGroup = new QActionGroup(this);
   upAxisGroup->setExclusive(true);
@@ -114,8 +119,8 @@ void MainWindow::setupMenus()
   zUpAction->setChecked(true);
   upAxisGroup->addAction(zUpAction);
 
-  viewMenu->addAction(orbitModeAction);
-  viewMenu->addAction(flyModeAction);
+  viewMenu->addAction(orbitModeAction_);
+  viewMenu->addAction(flyModeAction_);
   viewMenu->addSeparator();
   viewMenu->addAction(yUpAction);
   viewMenu->addAction(zUpAction);
@@ -163,22 +168,28 @@ void MainWindow::setupMenus()
 
   connect(exitAction, &QAction::triggered, this, [this]() { close(); });
 
-  connect(orbitModeAction,
+  connect(orbitModeAction_,
       &QAction::triggered,
       this,
-      [this, orbitModeAction, flyModeAction]() {
-        orbitModeAction->setChecked(true);
-        flyModeAction->setChecked(false);
+      [this]() {
         renderWidget_->setInputMode(RenderWidget::InputMode::Orbit);
       });
 
-  connect(flyModeAction,
+  connect(flyModeAction_,
       &QAction::triggered,
       this,
-      [this, orbitModeAction, flyModeAction]() {
-        orbitModeAction->setChecked(false);
-        flyModeAction->setChecked(true);
+      [this]() {
         renderWidget_->setInputMode(RenderWidget::InputMode::Fly);
+      });
+
+  connect(renderWidget_,
+      &RenderWidget::inputModeChanged,
+      this,
+      [this](RenderWidget::InputMode mode) {
+        if (!orbitModeAction_ || !flyModeAction_)
+          return;
+        orbitModeAction_->setChecked(mode == RenderWidget::InputMode::Orbit);
+        flyModeAction_->setChecked(mode == RenderWidget::InputMode::Fly);
       });
 
   connect(yUpAction, &QAction::triggered, this, [this, yUpAction, zUpAction]() {

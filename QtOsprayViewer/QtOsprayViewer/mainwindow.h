@@ -14,9 +14,11 @@ class MainWindow : public QMainWindow
   explicit MainWindow(QWidget *parent = nullptr);
 
  private:
-  RenderWidget *renderWidget_ = nullptr;
+ RenderWidget *renderWidget_ = nullptr;
   RenderWorkerClient *renderWorkerClient_ = nullptr;
   QAction *selectBrlcadObjectAction_ = nullptr;
+  QAction *orbitModeAction_ = nullptr;
+  QAction *flyModeAction_ = nullptr;
   void setupMenus();
   void updateBrlcadMenuState();
   void chooseAndLoadBrlcadObject(const QString &path, const QStringList &objects);

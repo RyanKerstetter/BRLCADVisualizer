@@ -156,6 +156,7 @@ class OsprayBackend
   void upsamplePassToDisplay();
   void applyAoBackoff(bool forcedByWatchdog);
   void applyPendingState();
+  void applyDefaultLights();
 
   int fbW_ = 1;
   int fbH_ = 1;
