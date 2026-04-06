@@ -6,7 +6,9 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QCoreApplication>
+#include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QInputDialog>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -22,7 +24,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
   renderWidget_->setRenderWorkerClient(renderWorkerClient_);
   setCentralWidget(renderWidget_);
   resize(1200, 800);
-  setWindowTitle("Interactive BRLCAD Ray Tracing - IBRT");
+  setWindowTitle("Interactive BRL-CAD Raytracer");
 
   connect(renderWidget_,
       &RenderWidget::sceneLoadFinished,
@@ -71,6 +73,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
   }
 
   setupMenus();
+  QTimer::singleShot(0, this, [this]() { loadStartupDemo(); });
 }
 
 void MainWindow::setupMenus()
@@ -90,6 +93,7 @@ void MainWindow::setupMenus()
 
   QMenu *viewMenu = menuBar()->addMenu("&View");
   QMenu *brlcadMenu = menuBar()->addMenu("&Select Model");
+  QMenu *demoMenu = fileMenu->addMenu("&Demo Models");
 
   QAction *orbitModeAction = new QAction("Orbit Mode", this);
   orbitModeAction->setCheckable(true);
@@ -119,6 +123,7 @@ void MainWindow::setupMenus()
   selectBrlcadObjectAction_ = new QAction("Select Object...", this);
   brlcadMenu->addAction(selectBrlcadObjectAction_);
   updateBrlcadMenuState();
+  populateDemoModelsMenu(demoMenu);
 
   connect(openAction, &QAction::triggered, this, [this]() {
     QString path = QFileDialog::getOpenFileName(this,
@@ -192,6 +197,78 @@ void MainWindow::setupMenus()
     chooseAndLoadBrlcadObject(
         renderWidget_->currentBrlcadPath(), renderWidget_->currentBrlcadObjects());
   });
+}
+
+void MainWindow::populateDemoModelsMenu(QMenu *menu)
+{
+  if (!menu)
+    return;
+
+#ifdef BRLCAD_INSTALL_PREFIX
+  const QString dbDir =
+      QDir(QStringLiteral(BRLCAD_INSTALL_PREFIX)).filePath(QStringLiteral("share/db"));
+#else
+  const QString dbDir;
+#endif
+
+  struct DemoModel
+  {
+    const char *fileName;
+    const char *label;
+  };
+
+  const DemoModel models[] = {
+      {"moss.g", "Moss"},
+      {"havoc.g", "Havoc"},
+  };
+
+  bool addedAny = false;
+  for (const DemoModel &model : models) {
+    const QString path = QDir(dbDir).filePath(QString::fromLatin1(model.fileName));
+    if (!QFileInfo::exists(path))
+      continue;
+
+    QAction *action = new QAction(QString::fromLatin1(model.label), this);
+    connect(action, &QAction::triggered, this, [this, path]() {
+      chooseAndLoadBrlcadObject(path, renderWidget_->listBrlcadObjects(path));
+    });
+    menu->addAction(action);
+    addedAny = true;
+  }
+
+  if (!addedAny) {
+    QAction *missingAction = new QAction("Demo Models Unavailable", this);
+    missingAction->setEnabled(false);
+    menu->addAction(missingAction);
+  }
+}
+
+QString MainWindow::defaultDemoPath() const
+{
+#ifdef BRLCAD_INSTALL_PREFIX
+  const QString dbDir =
+      QDir(QStringLiteral(BRLCAD_INSTALL_PREFIX)).filePath(QStringLiteral("share/db"));
+  const QString mossPath = QDir(dbDir).filePath(QStringLiteral("moss.g"));
+  if (QFileInfo::exists(mossPath))
+    return mossPath;
+#endif
+  return QString();
+}
+
+void MainWindow::loadStartupDemo()
+{
+  if (!renderWidget_ || renderWidget_->hasBrlcadScene() || !renderWidget_->currentBrlcadPath().isEmpty())
+    return;
+
+  const QString path = defaultDemoPath();
+  if (path.isEmpty())
+    return;
+
+  if (!renderWidget_->loadBrlcadModel(path, QStringLiteral("all.g"))) {
+    statusBar()->showMessage(QStringLiteral("Startup demo load failed: %1")
+                                 .arg(renderWidget_->lastError()),
+        5000);
+  }
 }
 
 void MainWindow::updateBrlcadMenuState()

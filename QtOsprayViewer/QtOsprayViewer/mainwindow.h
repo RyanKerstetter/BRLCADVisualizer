@@ -5,6 +5,7 @@
 class RenderWidget;
 class QAction;
 class RenderWorkerClient;
+class QMenu;
 
 class MainWindow : public QMainWindow
 {
@@ -19,4 +20,7 @@ class MainWindow : public QMainWindow
   void setupMenus();
   void updateBrlcadMenuState();
   void chooseAndLoadBrlcadObject(const QString &path, const QStringList &objects);
+  void populateDemoModelsMenu(QMenu *menu);
+  QString defaultDemoPath() const;
+  void loadStartupDemo();
 };

@@ -358,7 +358,13 @@ void RenderWidget::paintGL()
   ImGui_ImplOpenGL3_NewFrame();
   ImGui::NewFrame();
 
-  ImGui::Begin("Viewer");
+  if (!imguiVisible_) {
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    return;
+  }
+
+  ImGui::Begin("Interactive BRL-CAD Raytracer");
 
   if (sceneLoadInProgress_.load()) {
     ImGui::Separator();
@@ -662,9 +668,11 @@ void RenderWidget::paintGL()
     ImGui::Text("Alt + Left: X axis");
     ImGui::Text("Alt + Shift + Left: Y axis");
     ImGui::Text("Alt + Right: Z axis");
+    ImGui::Text("G: Toggle overlay");
   }
   else {
     ImGui::Text("Fly: WASD move | LMB look | Tab toggle");
+    ImGui::Text("G: Toggle overlay");
   }
 
   ImGui::End();
@@ -1047,6 +1055,12 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
 
   if (sceneLoadInProgress_.load())
     return;
+
+  if (e->key() == Qt::Key_G && !e->isAutoRepeat()) {
+    imguiVisible_ = !imguiVisible_;
+    update();
+    return;
+  }
 
   if (io.WantCaptureKeyboard)
     return;

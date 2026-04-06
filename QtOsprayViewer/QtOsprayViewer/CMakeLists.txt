@@ -152,6 +152,10 @@ target_include_directories(IBRTRenderWorker PRIVATE
     $<$<BOOL:${WIN32}>:${TBB_ROOT}/include>
 )
 
+target_compile_definitions(QtOsprayViewer PRIVATE
+    BRLCAD_INSTALL_PREFIX="${BRLCAD_PREFIX}"
+)
+
 target_link_libraries(QtOsprayViewer PRIVATE
     Qt6::Widgets
     Qt6::OpenGLWidgets

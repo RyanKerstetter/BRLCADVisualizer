@@ -153,6 +153,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   float imguiMouseWheel_ = 0.0f;
   QPointF imguiMousePos_{0.0, 0.0};
   bool imguiHasFocus_ = false;
+  bool imguiVisible_ = true;
   QString currentBrlcadPath_;
   QString currentBrlcadObject_;
   QStringList currentBrlcadObjects_;
