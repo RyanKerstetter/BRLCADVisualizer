@@ -57,7 +57,6 @@ struct BRLCAD : public AddStructShared<Geometry, ispc::BRLCAD_sh>
   application ap;
   rt_i *rtip{nullptr};
 
-  std::vector<rkcommon::math::vec4f> regionColors;
   mutable std::vector<resource> resources;
   std::vector<std::string> objects;
 };

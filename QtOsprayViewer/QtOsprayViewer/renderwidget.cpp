@@ -5,7 +5,6 @@
 #include <QMetaObject>
 #include <QPainter>
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstring>
 
@@ -29,10 +28,6 @@ RenderWidget::RenderWidget(QWidget *parent) : QOpenGLWidget(parent)
 
 RenderWidget::~RenderWidget()
 {
-  shuttingDown_.store(true);
-  invalidateWorkerFrameRequests();
-  if (workerFrameThread_.joinable())
-    workerFrameThread_.join();
   if (sceneLoadThread_.joinable())
     sceneLoadThread_.join();
 
@@ -40,23 +35,6 @@ RenderWidget::~RenderWidget()
   ImGui_ImplOpenGL3_Shutdown();
   ImGui::DestroyContext();
   doneCurrent();
-}
-
-void RenderWidget::setInteractionState(bool interacting)
-{
-  if (interacting_ != interacting) {
-    backend_.setInteracting(interacting);
-    interacting_ = interacting;
-  }
-
-  if (!usingWorkerRenderPath() || !renderWorkerClient_)
-    return;
-
-  if (!workerInteractionStateKnown_ || workerInteractionState_ != interacting) {
-    renderWorkerClient_->setInteracting(interacting);
-    workerInteractionState_ = interacting;
-    workerInteractionStateKnown_ = true;
-  }
 }
 
 void RenderWidget::applyViewAction(
@@ -236,28 +214,16 @@ void RenderWidget::syncCameraToBackend()
         center_.z - dist_ * forward.z);
 
     backend_.setCamera(eye, center_, orbitUp_, fovy_);
-    if (usingWorkerRenderPath()) {
-      std::lock_guard<std::mutex> lock(workerControlMutex_);
-      pendingWorkerCameraState_.eye = eye;
-      pendingWorkerCameraState_.center = center_;
-      pendingWorkerCameraState_.up = orbitUp_;
-      pendingWorkerCameraState_.fovyDeg = fovy_;
-      pendingWorkerCameraDirty_ = true;
-    }
+    if (usingWorkerRenderPath())
+      renderWorkerClient_->setCamera(eye, center_, orbitUp_, fovy_);
   } else {
     flyPitch_ = clampf(flyPitch_, -1.4f, 1.4f);
 
     vec3f forward = forwardFromAngles(flyYaw_, flyPitch_);
 
     backend_.setCamera(flyPos_, flyPos_ + forward, worldUp(), fovy_);
-    if (usingWorkerRenderPath()) {
-      std::lock_guard<std::mutex> lock(workerControlMutex_);
-      pendingWorkerCameraState_.eye = flyPos_;
-      pendingWorkerCameraState_.center = flyPos_ + forward;
-      pendingWorkerCameraState_.up = worldUp();
-      pendingWorkerCameraState_.fovyDeg = fovy_;
-      pendingWorkerCameraDirty_ = true;
-    }
+    if (usingWorkerRenderPath())
+      renderWorkerClient_->setCamera(flyPos_, flyPos_ + forward, worldUp(), fovy_);
   }
 }
 
@@ -269,10 +235,8 @@ bool RenderWidget::usingWorkerRenderPath() const
 void RenderWidget::resetAccumulationTargets()
 {
   backend_.resetAccumulation();
-  if (usingWorkerRenderPath()) {
-    std::lock_guard<std::mutex> lock(workerControlMutex_);
-    pendingWorkerResetAccumulation_ = true;
-  }
+  if (usingWorkerRenderPath())
+    renderWorkerClient_->resetAccumulation();
 }
 
 vec3f RenderWidget::sceneBoundsCenter() const
@@ -302,7 +266,25 @@ void RenderWidget::renderOnce()
     return;
 
   if (usingWorkerRenderPath()) {
-    scheduleWorkerFrameRequest();
+    const auto frame = renderWorkerClient_->requestFrame();
+    if (frame.image.isNull())
+      return;
+
+    image_ = frame.image;
+    workerLastFrameTimeMs_ = frame.frameTimeMs;
+    workerRenderFPS_ = frame.renderFPS;
+    workerAccumulatedFrames_ = frame.accumulatedFrames;
+    workerWatchdogCancels_ = frame.watchdogCancels;
+    workerAoAutoReductions_ = frame.aoAutoReductions;
+    if (!frame.renderer.isEmpty())
+      currentRenderer_ = frame.renderer;
+    update();
+
+    const float frameMs = frame.frameTimeMs;
+    if (frameMs < 10.0f)
+      renderBudgetMs_ = std::min(10, renderBudgetMs_ + 1);
+    else if (frameMs > 22.0f)
+      renderBudgetMs_ = std::max(3, renderBudgetMs_ - 1);
     return;
   }
 
@@ -315,7 +297,7 @@ void RenderWidget::renderOnce()
     return;
 
   if (image_.width() != w || image_.height() != h)
-    image_ = QImage(w, h, QImage::Format_ARGB32);
+    image_ = QImage(w, h, QImage::Format_RGBA8888);
 
   if (updatedImage) {
     std::memcpy(image_.bits(), px, size_t(w) * size_t(h) * 4);
@@ -329,94 +311,6 @@ void RenderWidget::renderOnce()
   }
 }
 
-void RenderWidget::scheduleWorkerFrameRequest()
-{
-  if (!usingWorkerRenderPath() || !renderWorkerClient_)
-    return;
-
-  if (workerFrameRequestInFlight_.exchange(true))
-    return;
-
-  if (workerFrameThread_.joinable())
-    workerFrameThread_.join();
-
-  const uint64_t generation = workerFrameGeneration_.load();
-  RenderWorkerClient *client = renderWorkerClient_;
-  workerFrameThread_ = std::thread([this, client, generation]() {
-    PendingWorkerCameraState cameraState;
-    bool sendCamera = false;
-    bool resetAccumulation = false;
-    {
-      std::lock_guard<std::mutex> lock(workerControlMutex_);
-      cameraState = pendingWorkerCameraState_;
-      sendCamera = pendingWorkerCameraDirty_;
-      resetAccumulation = pendingWorkerResetAccumulation_;
-      pendingWorkerCameraDirty_ = false;
-      pendingWorkerResetAccumulation_ = false;
-    }
-
-    if (resetAccumulation)
-      client->resetAccumulation();
-    if (sendCamera) {
-      client->setCamera(
-          cameraState.eye, cameraState.center, cameraState.up, cameraState.fovyDeg);
-    }
-
-    const auto frame = client->requestFrame();
-    QMetaObject::invokeMethod(
-        this,
-        [this, generation, frame]() { applyWorkerFrameResult(generation, frame); },
-        Qt::QueuedConnection);
-  });
-}
-
-void RenderWidget::applyWorkerFrameResult(
-    uint64_t generation, const RenderWorkerClient::FrameResult &frame)
-{
-  if (workerFrameThread_.joinable())
-    workerFrameThread_.join();
-  workerFrameRequestInFlight_.store(false);
-
-  if (shuttingDown_.load() || generation != workerFrameGeneration_.load())
-    return;
-
-  if (frame.image.isNull())
-    return;
-
-  image_ = frame.image;
-  workerLastFrameTimeMs_ = frame.frameTimeMs;
-  workerMapCopyTimeMs_ = frame.mapCopyTimeMs;
-  workerUpsampleTimeMs_ = frame.upsampleTimeMs;
-  workerRequestRoundTripMs_ = frame.requestRoundTripMs;
-  workerImageDecodeCopyMs_ = frame.imageDecodeCopyMs;
-  workerRenderFPS_ = frame.renderFPS;
-  workerCurrentScale_ = frame.currentScale;
-  workerAppliedAoSamples_ = frame.appliedAoSamples;
-  workerAppliedPixelSamples_ = frame.appliedPixelSamples;
-  workerInteracting_ = frame.interacting;
-  workerBrlcadTraceCalls_ = frame.brlcadTraceCalls;
-  workerBrlcadIntersectCalls_ = frame.brlcadIntersectCalls;
-  workerBrlcadRaysTested_ = frame.brlcadRaysTested;
-  workerBrlcadTraceTimeMs_ = frame.brlcadTraceTimeMs;
-  workerAccumulatedFrames_ = frame.accumulatedFrames;
-  workerWatchdogCancels_ = frame.watchdogCancels;
-  workerAoAutoReductions_ = frame.aoAutoReductions;
-  if (!frame.renderer.isEmpty())
-    currentRenderer_ = frame.renderer;
-  update();
-
-  const float frameMs = frame.frameTimeMs;
-  if (frameMs < 10.0f)
-    renderBudgetMs_ = std::min(10, renderBudgetMs_ + 1);
-  else if (frameMs > 22.0f)
-    renderBudgetMs_ = std::max(3, renderBudgetMs_ - 1);
-}
-
-void RenderWidget::invalidateWorkerFrameRequests()
-{
-  workerFrameGeneration_.fetch_add(1);
-}
-
 void RenderWidget::advanceRender()
 {
   if (!backendReady_ || !isVisible() || sceneLoadInProgress_.load())
@@ -427,7 +321,6 @@ void RenderWidget::advanceRender()
 
 void RenderWidget::paintGL()
 {
-  const auto paintStart = std::chrono::steady_clock::now();
   glViewport(0, 0, width() * devicePixelRatioF(), height() * devicePixelRatioF());
   glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT);
@@ -435,11 +328,8 @@ void RenderWidget::paintGL()
   // Draw OSPRay image with Qt
   QPainter p(this);
   if (!image_.isNull()) {
-    p.save();
-    p.translate(0.0, double(height()));
-    p.scale(1.0, -1.0);
-    p.drawImage(QRect(0, 0, width(), height()), image_);
-    p.restore();
+    QImage img = image_.rgbSwapped().mirrored(false, true);
+    p.drawImage(rect(), img);
   }
   p.end();
 
@@ -488,20 +378,6 @@ void RenderWidget::paintGL()
   if (usingWorkerRenderPath()) {
     ImGui::Text("Render path: Worker");
     ImGui::Text("Render time: %.2f ms", workerLastFrameTimeMs_);
-    ImGui::Text("Worker map/copy: %.2f ms", workerMapCopyTimeMs_);
-    ImGui::Text("Worker upsample: %.2f ms", workerUpsampleTimeMs_);
-    ImGui::Text("IPC round-trip: %.2f ms", workerRequestRoundTripMs_);
-    ImGui::Text("UI image copy: %.2f ms", workerImageDecodeCopyMs_);
-    ImGui::Text("UI paint: %.2f ms", uiPaintTimeMs_);
-    ImGui::Text("Interacting: %s", workerInteracting_ ? "yes" : "no");
-    ImGui::Text("Scale: %dx", workerCurrentScale_);
-    ImGui::Text(
-        "Applied samples: ao=%d pixel=%d", workerAppliedAoSamples_, workerAppliedPixelSamples_);
-    ImGui::Text("BRL-CAD trace: %.2f ms", workerBrlcadTraceTimeMs_);
-    ImGui::Text("BRL-CAD rays: %llu", static_cast<unsigned long long>(workerBrlcadRaysTested_));
-    ImGui::Text("BRL-CAD calls: trace=%llu intersect=%llu",
-        static_cast<unsigned long long>(workerBrlcadTraceCalls_),
-        static_cast<unsigned long long>(workerBrlcadIntersectCalls_));
     ImGui::Text("Render FPS: %.1f", workerRenderFPS_);
     ImGui::Text("Accumulated frames: %llu",
         static_cast<unsigned long long>(workerAccumulatedFrames_));
@@ -511,14 +387,6 @@ void RenderWidget::paintGL()
         static_cast<unsigned long long>(workerAoAutoReductions_));
   } else {
     ImGui::Text("Render time: %.2f ms", backend_.lastFrameTimeMs());
-    ImGui::Text("Map/copy: %.2f ms", backend_.lastMapCopyTimeMs());
-    ImGui::Text("Upsample: %.2f ms", backend_.lastUpsampleTimeMs());
-    ImGui::Text("UI paint: %.2f ms", uiPaintTimeMs_);
-    ImGui::Text("Interacting: %s", backend_.isInteracting() ? "yes" : "no");
-    ImGui::Text("Scale: %dx", backend_.currentScale());
-    ImGui::Text("Applied samples: ao=%d pixel=%d",
-        backend_.appliedAoSamples(),
-        backend_.appliedPixelSamples());
     ImGui::Text("Render FPS: %.1f", backend_.renderFPS());
     ImGui::Text("Accumulated frames: %llu",
         static_cast<unsigned long long>(backend_.accumulatedFrames()));
@@ -533,20 +401,6 @@ void RenderWidget::paintGL()
   ImGui::Separator();
   ImGui::Text("Renderer");
 
-  if (hasBrlcadScene()) {
-    bool colorEnabled = brlcadColorEnabled_;
-    if (ImGui::Checkbox("BRL-CAD Color", &colorEnabled)) {
-      brlcadColorEnabled_ = colorEnabled;
-      if (usingWorkerRenderPath())
-        renderWorkerClient_->setBrlcadColorEnabled(brlcadColorEnabled_);
-      else
-        backend_.setBrlcadColorEnabled(brlcadColorEnabled_);
-      resetAccumulationTargets();
-      renderOnce();
-      update();
-    }
-  }
-
   int rendererMode = 0;
   const std::string rendererName =
       usingWorkerRenderPath() ? currentRenderer_.toStdString() : backend_.currentRenderer();
@@ -554,54 +408,41 @@ void RenderWidget::paintGL()
     rendererMode = 1;
   else if (rendererName == "pathtracer")
     rendererMode = 2;
-  else if (rendererName.rfind("debug:", 0) == 0)
-    rendererMode = 3;
   else
     rendererMode = 0;
 
-  auto applyRendererSelection = [this](const QString &rendererId) {
-    currentRenderer_ = rendererId;
+  if (ImGui::RadioButton("ao", rendererMode == 0)) {
+    rendererMode = 0;
+    currentRenderer_ = QStringLiteral("ao");
     if (usingWorkerRenderPath())
       renderWorkerClient_->setRenderer(currentRenderer_);
     else
-      backend_.setRenderer(currentRenderer_.toStdString());
+      backend_.setRenderer("ao");
     resetAccumulationTargets();
     renderOnce();
     update();
-  };
-
-  if (ImGui::RadioButton("ao", rendererMode == 0)) {
-    rendererMode = 0;
-    applyRendererSelection(QStringLiteral("ao"));
   }
   if (ImGui::RadioButton("SciVis", rendererMode == 1)) {
     rendererMode = 1;
-    applyRendererSelection(QStringLiteral("scivis"));
+    currentRenderer_ = QStringLiteral("scivis");
+    if (usingWorkerRenderPath())
+      renderWorkerClient_->setRenderer(currentRenderer_);
+    else
+      backend_.setRenderer("scivis");
+    resetAccumulationTargets();
+    renderOnce();
+    update();
   }
   if (ImGui::RadioButton("PathTracer", rendererMode == 2)) {
     rendererMode = 2;
-    applyRendererSelection(QStringLiteral("pathtracer"));
-  }
-  if (ImGui::RadioButton("Debug", rendererMode == 3)) {
-    rendererMode = 3;
-    if (!currentRenderer_.startsWith("debug:"))
-      applyRendererSelection(QStringLiteral("debug:color"));
-  }
-  if (rendererMode == 3) {
-    static const char *debugLabels[] = {"color", "primID", "geomID", "Ns"};
-    int debugMode = 0;
-    const std::string debugName =
-        usingWorkerRenderPath() ? currentRenderer_.toStdString() : backend_.currentRenderer();
-    if (debugName == "debug:primID")
-      debugMode = 1;
-    else if (debugName == "debug:geomID")
-      debugMode = 2;
-    else if (debugName == "debug:Ns")
-      debugMode = 3;
-    if (ImGui::Combo("Debug Mode", &debugMode, debugLabels, IM_ARRAYSIZE(debugLabels))) {
-      applyRendererSelection(
-          QStringLiteral("debug:%1").arg(QString::fromUtf8(debugLabels[debugMode])));
-    }
+    currentRenderer_ = QStringLiteral("pathtracer");
+    if (usingWorkerRenderPath())
+      renderWorkerClient_->setRenderer(currentRenderer_);
+    else
+      backend_.setRenderer("pathtracer");
+    resetAccumulationTargets();
+    renderOnce();
+    update();
   }
 
   ImGui::Separator();
@@ -830,9 +671,6 @@ void RenderWidget::paintGL()
 
   ImGui::Render();
   ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-  const auto paintEnd = std::chrono::steady_clock::now();
-  uiPaintTimeMs_ =
-      std::chrono::duration<float, std::milli>(paintEnd - paintStart).count();
 }
 
 bool RenderWidget::loadModel(const QString &path)
@@ -1056,7 +894,7 @@ void RenderWidget::mousePressEvent(QMouseEvent *e)
   if (ImGui::GetIO().WantCaptureMouse)
     return;
 
-  setInteractionState(true);
+  backend_.setInteracting(true);
   lastMouse_ = e->pos();
 }
 
@@ -1075,9 +913,8 @@ void RenderWidget::mouseReleaseEvent(QMouseEvent *e)
     return;
   }
 
-  if (!(imguiMouseDown_[0] || imguiMouseDown_[1] || imguiMouseDown_[2])) {
-    setInteractionState(false);
-  }
+  if (!(imguiMouseDown_[0] || imguiMouseDown_[1] || imguiMouseDown_[2]))
+    backend_.setInteracting(false);
   update();
 }
 
@@ -1100,7 +937,7 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
   if (io.WantCaptureMouse)
     return;
 
-  setInteractionState(e->buttons() != Qt::NoButton);
+  backend_.setInteracting(e->buttons() != Qt::NoButton);
 
   const QPoint d = e->pos() - lastMouse_;
   lastMouse_ = e->pos();
@@ -1164,13 +1001,11 @@ void RenderWidget::wheelEvent(QWheelEvent *e)
   if (ImGui::GetIO().WantCaptureMouse)
     return;
 
-  setInteractionState(true);
+  backend_.setInteracting(true);
 
   float steps = e->angleDelta().y() / 120.f;
-  if (steps == 0.f) {
-    setInteractionState(false);
+  if (steps == 0.f)
     return;
-  }
 
   if (inputMode_ == InputMode::Orbit) {
     float maxExtent = sceneBoundsMaxExtent();
@@ -1190,7 +1025,7 @@ void RenderWidget::wheelEvent(QWheelEvent *e)
   resetAccumulationTargets();
   syncCameraToBackend();
   renderOnce();
-  setInteractionState(false);
+  backend_.setInteracting(false);
 }
 
 void RenderWidget::keyPressEvent(QKeyEvent *e)
@@ -1219,7 +1054,7 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
   if (e->key() == Qt::Key_W || e->key() == Qt::Key_A || e->key() == Qt::Key_S
       || e->key() == Qt::Key_D || e->key() == Qt::Key_Q || e->key() == Qt::Key_E
       || e->key() == Qt::Key_Tab) {
-    setInteractionState(true);
+    backend_.setInteracting(true);
   }
 
   if (e->key() == Qt::Key_Tab) {
@@ -1299,7 +1134,7 @@ void RenderWidget::keyReleaseEvent(QKeyEvent *e)
   if (e->key() == Qt::Key_W || e->key() == Qt::Key_A || e->key() == Qt::Key_S
       || e->key() == Qt::Key_D || e->key() == Qt::Key_Q || e->key() == Qt::Key_E
       || e->key() == Qt::Key_Tab) {
-    setInteractionState(false);
+    backend_.setInteracting(false);
   }
 }
 
@@ -1315,7 +1150,7 @@ void RenderWidget::focusOutEvent(QFocusEvent *e)
   Q_UNUSED(e);
   imguiHasFocus_ = false;
   if (!sceneLoadInProgress_.load())
-    setInteractionState(false);
+    backend_.setInteracting(false);
   update();
 }
 
@@ -1370,18 +1205,7 @@ bool RenderWidget::hasBrlcadScene() const
 
 void RenderWidget::setRenderWorkerClient(RenderWorkerClient *client)
 {
-  invalidateWorkerFrameRequests();
   renderWorkerClient_ = client;
-  workerInteractionStateKnown_ = false;
-  {
-    std::lock_guard<std::mutex> lock(workerControlMutex_);
-    pendingWorkerCameraDirty_ = false;
-    pendingWorkerResetAccumulation_ = false;
-  }
-  if (renderWorkerClient_)
-    setInteractionState(false);
-  if (renderWorkerClient_)
-    renderWorkerClient_->setBrlcadColorEnabled(brlcadColorEnabled_);
 }
 
 void RenderWidget::replayWorkerState()
@@ -1389,19 +1213,9 @@ void RenderWidget::replayWorkerState()
   if (!usingWorkerRenderPath())
     return;
 
-  invalidateWorkerFrameRequests();
-  {
-    std::lock_guard<std::mutex> lock(workerControlMutex_);
-    pendingWorkerCameraDirty_ = false;
-    pendingWorkerResetAccumulation_ = false;
-  }
-
   renderWorkerClient_->resize(width(), height());
   renderWorkerClient_->setRenderer(currentRenderer_);
   renderWorkerClient_->setRenderSettings(workerSettings_);
-  renderWorkerClient_->setBrlcadColorEnabled(brlcadColorEnabled_);
-  workerInteractionStateKnown_ = false;
-  setInteractionState(false);
 
   if (currentSceneIsObj_ && !currentModelPath_.isEmpty()) {
     const auto result = renderWorkerClient_->loadObj(currentModelPath_);
@@ -1430,7 +1244,6 @@ void RenderWidget::startAsyncLoad(
   if (sceneLoadThread_.joinable())
     sceneLoadThread_.join();
 
-  invalidateWorkerFrameRequests();
   sceneLoadInProgress_.store(true);
   loadStatusText_ = statusText;
   lastError_.clear();

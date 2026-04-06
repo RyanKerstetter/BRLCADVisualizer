@@ -6,48 +6,12 @@
 #include <QProcess>
 #include <QThread>
 
-#include <chrono>
 #include <cstring>
 #include <string>
-
-#ifdef _WIN32
-namespace {
-void lowerWorkerPriority(qint64 processId)
-{
-  if (processId <= 0)
-    return;
-
-  HANDLE process = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_INFORMATION,
-      FALSE,
-      static_cast<DWORD>(processId));
-  if (!process)
-    return;
-
-  SetPriorityClass(process, BELOW_NORMAL_PRIORITY_CLASS);
-  CloseHandle(process);
-}
-} // namespace
-#endif
 
 RenderWorkerClient::RenderWorkerClient(QObject *parent) : QObject(parent)
 {
   process_ = new QProcess(this);
-  process_->setProcessChannelMode(QProcess::SeparateChannels);
-  connect(process_, &QProcess::readyReadStandardError, this, [this]() {
-    appendProcessOutput(process_->readAllStandardError());
-  });
-  connect(process_, &QProcess::readyReadStandardOutput, this, [this]() {
-    appendProcessOutput(process_->readAllStandardOutput());
-  });
-  connect(process_,
-      qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
-      this,
-      [this](int exitCode, QProcess::ExitStatus exitStatus) {
-        const QString reason = exitStatus == QProcess::CrashExit ? QStringLiteral("crashed")
-                                                                 : QStringLiteral("exited");
-        lastError_ = buildDisconnectedError(
-            QStringLiteral("Render worker %1 with code %2.").arg(reason).arg(exitCode));
-      });
 }
 
 RenderWorkerClient::~RenderWorkerClient()
@@ -72,10 +36,6 @@ bool RenderWorkerClient::start(const QString &workerPath)
     lastError_ = QStringLiteral("Failed to start render worker process.");
     return false;
   }
-
-#ifdef _WIN32
-  lowerWorkerPriority(process_->processId());
-#endif
 
   if (!connectPipe()) {
     process_->kill();
@@ -133,87 +93,6 @@ bool RenderWorkerClient::isConnected() const
 QString RenderWorkerClient::lastError() const
 {
   return lastError_;
-}
-
-QString RenderWorkerClient::messageTypeLabel(uint32_t type) const
-{
-  switch (static_cast<ibrt::ipc::MessageType>(type)) {
-  case ibrt::ipc::MessageType::Ping:
-    return QStringLiteral("ping");
-  case ibrt::ipc::MessageType::Pong:
-    return QStringLiteral("pong");
-  case ibrt::ipc::MessageType::Shutdown:
-    return QStringLiteral("shutdown");
-  case ibrt::ipc::MessageType::ListBrlcadObjects:
-    return QStringLiteral("list BRL-CAD objects");
-  case ibrt::ipc::MessageType::BrlcadObjectList:
-    return QStringLiteral("BRL-CAD object list");
-  case ibrt::ipc::MessageType::LoadObj:
-    return QStringLiteral("load OBJ");
-  case ibrt::ipc::MessageType::LoadBrlcad:
-    return QStringLiteral("load BRL-CAD");
-  case ibrt::ipc::MessageType::LoadResult:
-    return QStringLiteral("load result");
-  case ibrt::ipc::MessageType::Error:
-    return QStringLiteral("error");
-  case ibrt::ipc::MessageType::Resize:
-    return QStringLiteral("resize");
-  case ibrt::ipc::MessageType::SetCamera:
-    return QStringLiteral("set camera");
-  case ibrt::ipc::MessageType::ResetAccumulation:
-    return QStringLiteral("reset accumulation");
-  case ibrt::ipc::MessageType::RequestFrame:
-    return QStringLiteral("request frame");
-  case ibrt::ipc::MessageType::FrameData:
-    return QStringLiteral("frame data");
-  case ibrt::ipc::MessageType::SetRenderer:
-    return QStringLiteral("set renderer");
-  case ibrt::ipc::MessageType::SetRenderSettings:
-    return QStringLiteral("set render settings");
-  case ibrt::ipc::MessageType::SetInteracting:
-    return QStringLiteral("set interacting");
-  case ibrt::ipc::MessageType::SetBrlcadColorEnabled:
-    return QStringLiteral("set BRL-CAD color enabled");
-  }
-  return QStringLiteral("unknown request");
-}
-
-void RenderWorkerClient::appendProcessOutput(const QByteArray &data)
-{
-  if (data.isEmpty())
-    return;
-
-  workerOutputTail_ += QString::fromLocal8Bit(data);
-  constexpr int maxChars = 4000;
-  if (workerOutputTail_.size() > maxChars)
-    workerOutputTail_.remove(0, workerOutputTail_.size() - maxChars);
-}
-
-QString RenderWorkerClient::buildDisconnectedError(const QString &contextMessage) const
-{
-  QString error = contextMessage;
-
-  if (process_->state() == QProcess::NotRunning) {
-    error += QStringLiteral(" Process state: not running.");
-    if (process_->exitStatus() == QProcess::CrashExit) {
-      error += QStringLiteral(" Exit status: crash.");
-    } else {
-      error += QStringLiteral(" Exit code: %1.").arg(process_->exitCode());
-    }
-  }
-
-  const QString output = workerOutputTail_.trimmed();
-  if (!output.isEmpty()) {
-    QString tail = output;
-    const int lastBreak = std::max(tail.lastIndexOf('\n'), tail.lastIndexOf('\r'));
-    if (lastBreak >= 0)
-      tail = tail.mid(lastBreak + 1).trimmed();
-    if (tail.isEmpty())
-      tail = output;
-    error += QStringLiteral(" Worker output: %1").arg(tail);
-  }
-
-  return error;
 }
 
 QStringList RenderWorkerClient::listBrlcadObjects(const QString &path)
@@ -447,72 +326,29 @@ bool RenderWorkerClient::setRenderSettings(const RenderSettingsState &settings)
 #endif
 }
 
-bool RenderWorkerClient::setInteracting(bool interacting)
-{
-#ifndef _WIN32
-  Q_UNUSED(interacting);
-  return false;
-#else
-  const uint32_t payloadValue = interacting ? 1u : 0u;
-  std::string response;
-  return sendRequestBytes(static_cast<uint32_t>(ibrt::ipc::MessageType::SetInteracting),
-      std::string(reinterpret_cast<const char *>(&payloadValue), sizeof(payloadValue)),
-      &response);
-#endif
-}
-
-bool RenderWorkerClient::setBrlcadColorEnabled(bool enabled)
-{
-#ifndef _WIN32
-  Q_UNUSED(enabled);
-  return false;
-#else
-  const uint32_t payloadValue = enabled ? 1u : 0u;
-  std::string response;
-  return sendRequestBytes(
-      static_cast<uint32_t>(ibrt::ipc::MessageType::SetBrlcadColorEnabled),
-      std::string(reinterpret_cast<const char *>(&payloadValue), sizeof(payloadValue)),
-      &response);
-#endif
-}
-
 RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
 {
   FrameResult result;
 #ifndef _WIN32
   return result;
 #else
-  const auto requestStart = std::chrono::steady_clock::now();
   std::string payload;
   if (!sendRequestBytes(static_cast<uint32_t>(ibrt::ipc::MessageType::RequestFrame),
           std::string(),
           &payload)) {
     return result;
   }
-  const auto requestEnd = std::chrono::steady_clock::now();
-  result.requestRoundTripMs =
-      std::chrono::duration<float, std::milli>(requestEnd - requestStart).count();
 
   struct FrameHeader
   {
     uint32_t width;
     uint32_t height;
     float frameTimeMs;
-    float mapCopyTimeMs;
-    float upsampleTimeMs;
     float renderFPS;
-    int32_t currentScale;
-    int32_t appliedAoSamples;
-    int32_t appliedPixelSamples;
     uint32_t updated;
-    uint32_t interacting;
     uint64_t accumulatedFrames;
     uint64_t watchdogCancels;
     uint64_t aoAutoReductions;
-    uint64_t brlcadTraceCalls;
-    uint64_t brlcadIntersectCalls;
-    uint64_t brlcadRaysTested;
-    float brlcadTraceTimeMs;
     uint32_t rendererNameSize;
   };
 
@@ -527,25 +363,11 @@ RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
     return result;
   }
 
-  const auto imageCopyStart = std::chrono::steady_clock::now();
-  QImage image(header.width, header.height, QImage::Format_ARGB32);
+  QImage image(header.width, header.height, QImage::Format_RGBA8888);
   std::memcpy(image.bits(), payload.data() + sizeof(FrameHeader), size_t(pixelBytes));
-  const auto imageCopyEnd = std::chrono::steady_clock::now();
   result.image = image;
   result.frameTimeMs = header.frameTimeMs;
-  result.mapCopyTimeMs = header.mapCopyTimeMs;
-  result.upsampleTimeMs = header.upsampleTimeMs;
-  result.imageDecodeCopyMs =
-      std::chrono::duration<float, std::milli>(imageCopyEnd - imageCopyStart).count();
   result.renderFPS = header.renderFPS;
-  result.currentScale = header.currentScale;
-  result.appliedAoSamples = header.appliedAoSamples;
-  result.appliedPixelSamples = header.appliedPixelSamples;
-  result.interacting = header.interacting != 0;
-  result.brlcadTraceCalls = header.brlcadTraceCalls;
-  result.brlcadIntersectCalls = header.brlcadIntersectCalls;
-  result.brlcadRaysTested = header.brlcadRaysTested;
-  result.brlcadTraceTimeMs = header.brlcadTraceTimeMs;
   result.updated = header.updated != 0;
   result.accumulatedFrames = header.accumulatedFrames;
   result.watchdogCancels = header.watchdogCancels;
@@ -616,9 +438,7 @@ bool RenderWorkerClient::sendRequestBytes(
       requestId,
       payload};
   if (!ibrt::ipc::writeMessage(pipe_, request)) {
-    lastError_ = buildDisconnectedError(
-        QStringLiteral("Failed to send %1 request to render worker.")
-            .arg(messageTypeLabel(type)));
+    lastError_ = QStringLiteral("Failed to send request to render worker.");
     closePipe();
     emit workerConnectionChanged(false);
     return false;
@@ -626,11 +446,7 @@ bool RenderWorkerClient::sendRequestBytes(
 
   ibrt::ipc::Message response;
   if (!ibrt::ipc::readMessage(pipe_, response)) {
-    appendProcessOutput(process_->readAllStandardError());
-    appendProcessOutput(process_->readAllStandardOutput());
-    lastError_ = buildDisconnectedError(
-        QStringLiteral("Failed to read %1 response from render worker.")
-            .arg(messageTypeLabel(type)));
+    lastError_ = QStringLiteral("Failed to read response from render worker.");
     closePipe();
     emit workerConnectionChanged(false);
     return false;
@@ -671,9 +487,7 @@ bool RenderWorkerClient::sendRequestBytes(
           || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetCamera)
           || type == static_cast<uint32_t>(ibrt::ipc::MessageType::ResetAccumulation)
           || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderer)
-          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderSettings)
-          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetInteracting)
-          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetBrlcadColorEnabled))
+          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderSettings))
       && response.type != ibrt::ipc::MessageType::LoadResult) {
     lastError_ = QStringLiteral("Unexpected response to render control request.");
     return false;

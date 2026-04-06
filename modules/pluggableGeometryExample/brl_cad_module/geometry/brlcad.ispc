@@ -2,12 +2,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/DifferentialGeometry.ih"
-#include "common/Data.ih"
 #include "common/Ray.ih"
 // c++ shared
 #include "BRLCADShared.h"
 
 OSPRAY_BEGIN_ISPC_NAMESPACE
+
+static inline varying vec4f unpackRegionColor(varying uint32 packed)
+{
+  const uniform float scale = 1.0f / 255.0f;
+  return make_vec4f((float)((packed >> 0) & 0xffu) * scale,
+      (float)((packed >> 8) & 0xffu) * scale,
+      (float)((packed >> 16) & 0xffu) * scale,
+      (float)((packed >> 24) & 0xffu) * scale);
+}
 
 // postIntersect: called by Geometry_dispatch_postIntersect for GEOMETRY_TYPE_UNKNOWN.
 // Fill dg.Ng and dg.Ns from the intersection normal stored in ray.Ng.
@@ -20,11 +28,7 @@ SYCL_EXTERNAL void BRLCAD_postIntersect(const Geometry *uniform _self,
   const BRLCAD_sh *uniform self = (const BRLCAD_sh *uniform)_self;
   dg.Ng = dg.Ns = ray.Ng;
   if ((flags & DG_COLOR) && self->colorEnabled != 0) {
-    dg.color = make_vec4f(0.8f, 0.8f, 0.8f, 1.0f);
-    if (valid(self->regionColors) && self->regionColors.numItems > 0) {
-      dg.color = get_vec4f(
-          self->regionColors, min(ray.primID, self->regionColors.numItems - 1));
-    }
+    dg.color = unpackRegionColor(ray.primID);
   }
 }
 

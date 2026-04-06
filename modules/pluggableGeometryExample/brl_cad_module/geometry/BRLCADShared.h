@@ -17,14 +17,11 @@ struct BRLCAD_sh
 {
   Geometry super; // MUST be first (mirrors ispc::Geometry layout)
   void *brlcadSelf; // pointer back to the C++ BRLCAD object
-  Data1D regionColors; // per-region RGBA, indexed by ray.primID / reg_bit
   uint32 colorEnabled;
 
 #ifdef __cplusplus
   BRLCAD_sh()
-      : brlcadSelf(nullptr),
-        regionColors{nullptr, 0, 0, false},
-        colorEnabled(1)
+      : brlcadSelf(nullptr), colorEnabled(1)
   {}
 #endif
 };

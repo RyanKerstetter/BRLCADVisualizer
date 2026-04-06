@@ -7,7 +7,6 @@
 
 #include <cstdint>
 #include <mutex>
-#include <string>
 
 #include <ospray/ospray_cpp/ext/rkcommon.h>
 
@@ -26,20 +25,8 @@ class RenderWorkerClient : public QObject
   {
     QImage image;
     float frameTimeMs = 0.0f;
-    float mapCopyTimeMs = 0.0f;
-    float upsampleTimeMs = 0.0f;
-    float requestRoundTripMs = 0.0f;
-    float imageDecodeCopyMs = 0.0f;
     bool updated = false;
     float renderFPS = 0.0f;
-    int currentScale = 1;
-    int appliedAoSamples = 0;
-    int appliedPixelSamples = 1;
-    bool interacting = false;
-    uint64_t brlcadTraceCalls = 0;
-    uint64_t brlcadIntersectCalls = 0;
-    uint64_t brlcadRaysTested = 0;
-    float brlcadTraceTimeMs = 0.0f;
     uint64_t accumulatedFrames = 0;
     uint64_t watchdogCancels = 0;
     uint64_t aoAutoReductions = 0;
@@ -89,8 +76,6 @@ class RenderWorkerClient : public QObject
   bool resetAccumulation();
   bool setRenderer(const QString &rendererType);
   bool setRenderSettings(const RenderSettingsState &settings);
-  bool setInteracting(bool interacting);
-  bool setBrlcadColorEnabled(bool enabled);
   FrameResult requestFrame();
   bool restart();
 
@@ -98,9 +83,6 @@ class RenderWorkerClient : public QObject
   void workerConnectionChanged(bool connected);
 
  private:
-  QString messageTypeLabel(uint32_t type) const;
-  void appendProcessOutput(const QByteArray &data);
-  QString buildDisconnectedError(const QString &contextMessage) const;
 #ifdef _WIN32
   bool connectPipe();
   bool sendPing();
@@ -115,7 +97,6 @@ class RenderWorkerClient : public QObject
   QString workerPath_;
   QString pipeName_;
   QString lastError_;
-  QString workerOutputTail_;
   uint64_t nextRequestId_ = 2;
   mutable std::mutex requestMutex_;
 };

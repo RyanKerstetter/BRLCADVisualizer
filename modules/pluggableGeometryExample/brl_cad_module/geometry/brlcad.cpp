@@ -17,7 +17,6 @@
 #include "brlcad.h"
 
 #include <atomic>
-#include <chrono>
 #include <cstdio>
 #include <limits>
 #include <sstream>
@@ -36,23 +35,6 @@ extern "C" void *BRLCAD_intersect_addr();
 
 namespace ospray {
 namespace brlcad {
-
-namespace {
-
-struct BrlcadProfilerTotals
-{
-  uint64_t traceCalls = 0;
-  uint64_t intersectCalls = 0;
-  uint64_t raysTested = 0;
-  uint64_t traceNanoseconds = 0;
-};
-
-static std::atomic<uint64_t> g_traceCalls{0};
-static std::atomic<uint64_t> g_intersectCalls{0};
-static std::atomic<uint64_t> g_raysTested{0};
-static std::atomic<uint64_t> g_traceNanoseconds{0};
-
-} // namespace
 
 // ---------------------------------------------------------------------------
 // Thread-local CPU index for per-thread BRL-CAD resources
@@ -100,9 +82,18 @@ static unsigned int currentContextInstID(const RTCIntersectFunctionNArguments *a
   return args->context->instID[0];
 }
 
-static inline rkcommon::math::vec4f fallbackRegionColor()
+static inline uint32_t packRegionColor(float r, float g, float b, float a = 1.0f)
 {
-  return rkcommon::math::vec4f(0.8f, 0.8f, 0.8f, 1.0f);
+  const auto toByte = [](float v) -> uint32_t {
+    const float clamped = std::max(0.0f, std::min(1.0f, v));
+    return static_cast<uint32_t>(clamped * 255.0f + 0.5f);
+  };
+  return toByte(r) | (toByte(g) << 8) | (toByte(b) << 16) | (toByte(a) << 24);
+}
+
+static inline uint32_t fallbackRegionColor()
+{
+  return packRegionColor(0.8f, 0.8f, 0.8f, 1.0f);
 }
 
 // ---------------------------------------------------------------------------
@@ -191,10 +182,13 @@ static int hitCallback(application *ap, partition *PartHeadp, seg * /*segs*/)
     hit.Ng_z = inormal[2];
     hit.geomID = static_cast<unsigned int>(ap->a_user);
     const region *region = pp->pt_regionp;
-    hit.primID =
-        (region && region->reg_bit >= 0)
-        ? static_cast<unsigned int>(region->reg_bit)
-        : 0u;
+    hit.primID = fallbackRegionColor();
+    if (region && region->reg_mater.ma_color_valid) {
+      hit.primID = packRegionColor(region->reg_mater.ma_color[0],
+          region->reg_mater.ma_color[1],
+          region->reg_mater.ma_color[2],
+          1.0f);
+    }
     return 1;
   }
 
@@ -212,7 +206,6 @@ static int missCallback(application * /*ap*/)
 
 static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit, unsigned int geomID)
 {
-  const auto traceStart = std::chrono::steady_clock::now();
   auto &ray = rayhit.ray;
   auto &hit = rayhit.hit;
   application ap;
@@ -242,12 +235,6 @@ static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit, unsigned int geomID)
   hit.primID = RTC_INVALID_GEOMETRY_ID;
 
   auto didHit = rt_shootray(&ap);
-  const auto traceEnd = std::chrono::steady_clock::now();
-  g_traceCalls.fetch_add(1, std::memory_order_relaxed);
-  g_traceNanoseconds.fetch_add(
-      static_cast<uint64_t>(
-          std::chrono::duration_cast<std::chrono::nanoseconds>(traceEnd - traceStart).count()),
-      std::memory_order_relaxed);
   if (didHit <= 0) {
     hit.geomID = RTC_INVALID_GEOMETRY_ID;
     hit.primID = RTC_INVALID_GEOMETRY_ID;
@@ -289,8 +276,6 @@ extern "C" void brlcadIntersectN_C(void *self,
 
   const unsigned int N = args->N;
   const unsigned int geomID = args->geomID;
-  g_intersectCalls.fetch_add(1, std::memory_order_relaxed);
-  g_raysTested.fetch_add(N, std::memory_order_relaxed);
 
   if (isOcclusionTest) {
     // args was actually RTCOccludedFunctionNArguments* cast to intersect args.
@@ -365,23 +350,7 @@ BRLCAD::~BRLCAD()
 
 size_t BRLCAD::numPrimitives() const
 {
-  return rtip ? std::max<size_t>(regionColors.size(), 1) : 0;
-}
-
-#ifdef _WIN32
-#define BRLCAD_PROFILE_EXPORT __declspec(dllexport)
-#else
-#define BRLCAD_PROFILE_EXPORT __attribute__((visibility("default")))
-#endif
-
-extern "C" BRLCAD_PROFILE_EXPORT void brlcadProfileSnapshot(BrlcadProfilerTotals *outTotals)
-{
-  if (!outTotals)
-    return;
-  outTotals->traceCalls = g_traceCalls.load(std::memory_order_relaxed);
-  outTotals->intersectCalls = g_intersectCalls.load(std::memory_order_relaxed);
-  outTotals->raysTested = g_raysTested.load(std::memory_order_relaxed);
-  outTotals->traceNanoseconds = g_traceNanoseconds.load(std::memory_order_relaxed);
+  return rtip ? 1 : 0;
 }
 
 void BRLCAD::commit()
@@ -400,8 +369,6 @@ void BRLCAD::commit()
     rt_free_rti(rtip);
     rtip = nullptr;
   }
-  regionColors.clear();
-
   const std::string filename = getParam<std::string>("filename", "");
   if (filename.empty())
     throw std::runtime_error("BRL-CAD geometry requires 'filename' parameter");
@@ -440,25 +407,13 @@ void BRLCAD::commit()
   }
   rt_prep_parallel(rtip, nThreads);
 
-  regionColors.assign(std::max<size_t>(rtip->nregions, 1), fallbackRegionColor());
   if (rtip->Regions && rtip->nregions > 0) {
     for (size_t i = 0; i < rtip->nregions; ++i) {
       region *reg = rtip->Regions[i];
-      if (!reg || reg->reg_bit < 0)
+      if (!reg)
         continue;
 
-      const size_t regBit = static_cast<size_t>(reg->reg_bit);
-      if (regBit >= regionColors.size())
-        regionColors.resize(regBit + 1, fallbackRegionColor());
-
       rt_region_color_map(reg);
-      if (reg->reg_mater.ma_color_valid) {
-        regionColors[regBit] = rkcommon::math::vec4f(reg->reg_mater.ma_color[0],
-            reg->reg_mater.ma_color[1],
-            reg->reg_mater.ma_color[2],
-            1.0f);
-      }
-
     }
   }
 
@@ -481,14 +436,6 @@ void BRLCAD::commit()
   }
 
   getSh()->brlcadSelf = this;
-  if (!regionColors.empty()) {
-    getSh()->regionColors.addr = reinterpret_cast<uint8_t *>(regionColors.data());
-    getSh()->regionColors.byteStride = sizeof(rkcommon::math::vec4f);
-    getSh()->regionColors.numItems = static_cast<uint32_t>(regionColors.size());
-    getSh()->regionColors.huge = false;
-  } else {
-    getSh()->regionColors = ispc::Data1D{nullptr, 0, 0, false};
-  }
   getSh()->colorEnabled = colorEnabled ? 1u : 0u;
   createEmbreeUserGeometry((RTCBoundsFunction)brlcadBounds);
 

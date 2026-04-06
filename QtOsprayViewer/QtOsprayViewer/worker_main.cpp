@@ -14,32 +14,6 @@
 
 namespace {
 
-struct BrlcadProfilerTotals
-{
-  uint64_t traceCalls;
-  uint64_t intersectCalls;
-  uint64_t raysTested;
-  uint64_t traceNanoseconds;
-};
-
-using BrlcadProfileSnapshotFn = void (*)(BrlcadProfilerTotals *);
-
-static BrlcadProfileSnapshotFn getBrlcadProfileSnapshotFn()
-{
-#ifdef _WIN32
-  static BrlcadProfileSnapshotFn fn = []() -> BrlcadProfileSnapshotFn {
-    HMODULE module = GetModuleHandleA("ospray_module_brl_cad.dll");
-    if (!module)
-      return nullptr;
-    return reinterpret_cast<BrlcadProfileSnapshotFn>(
-        GetProcAddress(module, "brlcadProfileSnapshot"));
-  }();
-  return fn;
-#else
-  return nullptr;
-#endif
-}
-
 static void osprayErrorCallback(void *, OSPError error, const char *message)
 {
   fprintf(stderr,
@@ -115,9 +89,6 @@ int main(int argc, char *argv[])
     fprintf(stderr, "IBRT render worker missing --pipe argument.\n");
     return 1;
   }
-
-  // Keep the UI responsive when heavy scenes fully occupy the CPU.
-  SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
 
   HANDLE pipe = CreateNamedPipeA(pipeName.c_str(),
       PIPE_ACCESS_DUPLEX,
@@ -264,61 +235,25 @@ int main(int argc, char *argv[])
 
     case ibrt::ipc::MessageType::RequestFrame: {
       const bool updated = backend.advanceRender();
-      static BrlcadProfilerTotals previousBrlcadTotals{};
-      BrlcadProfilerTotals currentBrlcadTotals = previousBrlcadTotals;
-      if (const auto snapshotFn = getBrlcadProfileSnapshotFn())
-        snapshotFn(&currentBrlcadTotals);
-
-      BrlcadProfilerTotals deltaBrlcadTotals{};
-      deltaBrlcadTotals.traceCalls =
-          currentBrlcadTotals.traceCalls - previousBrlcadTotals.traceCalls;
-      deltaBrlcadTotals.intersectCalls =
-          currentBrlcadTotals.intersectCalls - previousBrlcadTotals.intersectCalls;
-      deltaBrlcadTotals.raysTested =
-          currentBrlcadTotals.raysTested - previousBrlcadTotals.raysTested;
-      deltaBrlcadTotals.traceNanoseconds =
-          currentBrlcadTotals.traceNanoseconds - previousBrlcadTotals.traceNanoseconds;
-      previousBrlcadTotals = currentBrlcadTotals;
-
       struct FrameHeader
       {
         uint32_t width;
         uint32_t height;
         float frameTimeMs;
-        float mapCopyTimeMs;
-        float upsampleTimeMs;
         float renderFPS;
-        int32_t currentScale;
-        int32_t appliedAoSamples;
-        int32_t appliedPixelSamples;
         uint32_t updated;
-        uint32_t interacting;
         uint64_t accumulatedFrames;
         uint64_t watchdogCancels;
         uint64_t aoAutoReductions;
-        uint64_t brlcadTraceCalls;
-        uint64_t brlcadIntersectCalls;
-        uint64_t brlcadRaysTested;
-        float brlcadTraceTimeMs;
         uint32_t rendererNameSize;
       } header{static_cast<uint32_t>(backend.width()),
           static_cast<uint32_t>(backend.height()),
           backend.lastFrameTimeMs(),
-          backend.lastMapCopyTimeMs(),
-          backend.lastUpsampleTimeMs(),
           backend.renderFPS(),
-          backend.currentScale(),
-          backend.appliedAoSamples(),
-          backend.appliedPixelSamples(),
           updated ? 1u : 0u,
-          backend.isInteracting() ? 1u : 0u,
           backend.accumulatedFrames(),
           backend.watchdogCancelCount(),
           backend.aoAutoReductionCount(),
-          deltaBrlcadTotals.traceCalls,
-          deltaBrlcadTotals.intersectCalls,
-          deltaBrlcadTotals.raysTested,
-          float(deltaBrlcadTotals.traceNanoseconds) / 1000000.0f,
           static_cast<uint32_t>(backend.currentRenderer().size())};
 
       std::string payload(sizeof(FrameHeader), '\0');
@@ -389,36 +324,6 @@ int main(int argc, char *argv[])
       backend.setCustomFullResAccumulationOnly(
           payload.customFullResAccumulationOnly != 0);
       backend.setCustomWatchdogTimeoutMs(payload.customWatchdogTimeoutMs);
-      ibrt::ipc::writeMessage(
-          pipe, {ibrt::ipc::MessageType::LoadResult, message.requestId, std::string()});
-      break;
-    }
-
-    case ibrt::ipc::MessageType::SetInteracting: {
-      uint32_t interacting = 0;
-      if (!readPodPayload(message.payload, interacting)) {
-        ibrt::ipc::writeMessage(pipe,
-            {ibrt::ipc::MessageType::Error,
-                message.requestId,
-                "Invalid interacting payload."});
-        break;
-      }
-      backend.setInteracting(interacting != 0);
-      ibrt::ipc::writeMessage(
-          pipe, {ibrt::ipc::MessageType::LoadResult, message.requestId, std::string()});
-      break;
-    }
-
-    case ibrt::ipc::MessageType::SetBrlcadColorEnabled: {
-      uint32_t enabled = 0;
-      if (!readPodPayload(message.payload, enabled)) {
-        ibrt::ipc::writeMessage(pipe,
-            {ibrt::ipc::MessageType::Error,
-                message.requestId,
-                "Invalid BRL-CAD color payload."});
-        break;
-      }
-      backend.setBrlcadColorEnabled(enabled != 0);
       ibrt::ipc::writeMessage(
           pipe, {ibrt::ipc::MessageType::LoadResult, message.requestId, std::string()});
       break;

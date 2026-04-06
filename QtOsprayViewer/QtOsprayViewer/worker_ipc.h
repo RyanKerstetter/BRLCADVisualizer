@@ -26,9 +26,7 @@ enum class MessageType : uint32_t
   RequestFrame = 13,
   FrameData = 14,
   SetRenderer = 15,
-  SetRenderSettings = 16,
-  SetInteracting = 17,
-  SetBrlcadColorEnabled = 18
+  SetRenderSettings = 16
 };
 
 struct MessageHeader

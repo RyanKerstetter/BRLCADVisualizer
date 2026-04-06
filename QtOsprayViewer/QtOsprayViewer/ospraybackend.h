@@ -83,17 +83,12 @@ class OsprayBackend
   void setCustomWatchdogTimeoutMs(int ms);
   int customWatchdogTimeoutMs() const;
   void setInteracting(bool interacting);
-  void setBrlcadColorEnabled(bool enabled);
-  bool brlcadColorEnabled() const;
 
   const std::string &lastError() const;
   uint64_t accumulatedFrames() const;
   uint64_t watchdogCancelCount() const;
   uint64_t aoAutoReductionCount() const;
   int currentScale() const;
-  bool isInteracting() const;
-  int appliedAoSamples() const;
-  int appliedPixelSamples() const;
   bool dynamicModeActive() const;
   bool backoffApplied() const;
 
@@ -111,8 +106,6 @@ class OsprayBackend
  
 
   float lastFrameTimeMs() const;
-  float lastMapCopyTimeMs() const;
-  float lastUpsampleTimeMs() const;
   float renderFPS() const;
 
  private:
@@ -155,15 +148,11 @@ class OsprayBackend
   ospray::cpp::FrameBuffer passFb_;
   ospray::cpp::FrameBuffer accumFb_;
   ospray::cpp::Future currentFrame_;
-  std::string currentBrlcadPath_;
-  std::string currentBrlcadObject_;
 
   std::vector<uint32_t> displayPixels_;
   std::vector<uint32_t> passPixels_;
   std::string lastError_;
   float lastFrameTimeMs_ = 0.0f;
-  float lastMapCopyTimeMs_ = 0.0f;
-  float lastUpsampleTimeMs_ = 0.0f;
   std::string currentRenderer_ = "scivis";
   uint64_t accumulatedFrames_ = 0;
   static constexpr int kMaxSafeAoSamples = 32;
@@ -184,17 +173,14 @@ class OsprayBackend
   uint64_t aoAutoReductionCount_ = 0;
   std::chrono::steady_clock::time_point inFlightStart_;
   bool inFlightStartValid_ = false;
-  std::chrono::steady_clock::time_point interactionRecoveryDeadline_{};
   static constexpr std::array<int, 5> kProgressiveScales{{16, 8, 4, 2, 1}};
   static constexpr int kDefaultWatchdogMs = 1500;
   static constexpr int kAoBackoffStreak = 3;
-  static constexpr int kInteractionRecoveryMs = 150;
 
   bool watchdogTriggered_ = false;
   bool dynamicModeActive_ = false;
   bool backoffApplied_ = false;
   bool isInteracting_ = false;
-  bool brlcadColorEnabled_ = true;
   int aoBackoffSteps_ = 0;
   int progressiveFramesAtCurrentScale_ = 0;
   std::optional<PendingCameraState> pendingCameraState_;
@@ -222,7 +208,6 @@ class OsprayBackend
   int sanitizeScale(int scale) const;
   int scaleToIndex(int scale) const;
   int startScaleForCurrentMode() const;
-  int interactionStartScaleForCurrentMode() const;
   float targetFrameTimeForCurrentMode() const;
   bool accumulationEnabledForCurrentMode() const;
   int maxAccumulationFramesForCurrentMode() const;
@@ -231,6 +216,5 @@ class OsprayBackend
   int configuredPixelSamplesForCurrentMode() const;
   bool fullResAccumulationOnlyForCurrentMode() const;
   bool lowQualityWhileInteractingForCurrentMode() const;
-  bool interactionRecoveryActive() const;
   void applyRendererSamplingParams(int aoSamples, int pixelSamples);
 };
