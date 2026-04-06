@@ -19,15 +19,12 @@ SYCL_EXTERNAL void BRLCAD_postIntersect(const Geometry *uniform _self,
 {
   const BRLCAD_sh *uniform self = (const BRLCAD_sh *uniform)_self;
   dg.Ng = dg.Ns = ray.Ng;
-  if (flags & DG_COLOR) {
+  if ((flags & DG_COLOR) && self->colorEnabled != 0) {
     dg.color = make_vec4f(0.8f, 0.8f, 0.8f, 1.0f);
     if (valid(self->regionColors) && self->regionColors.numItems > 0) {
       dg.color = get_vec4f(
           self->regionColors, min(ray.primID, self->regionColors.numItems - 1));
     }
-  }
-  if (self->materials != NULL && self->numMaterials > 0) {
-    dg.material = self->materials[min(ray.primID, self->numMaterials - 1)];
   }
 }
 

@@ -70,20 +70,6 @@ std::string processTag()
   return "process";
 }
 
-void resetBrlcadDebugLogs()
-{
-  static const char *kLogFiles[] = {"brlcad_color_debug.log",
-      "scivis_surface_debug.log",
-      "geometricmodel_debug.log"};
-  for (const char *filename : kLogFiles) {
-    const std::string path = runtimeLogPath(filename);
-    if (path.empty())
-      continue;
-    if (FILE *logFile = fopen(path.c_str(), "w"))
-      fclose(logFile);
-  }
-}
-
 void logBrlcadDebug(const char *fmt, ...)
 {
   char body[1024];
@@ -135,90 +121,6 @@ std::string trimCopy(const std::string &value)
 
   const auto last = value.find_last_not_of(" \t\r\n");
   return value.substr(first, last - first + 1);
-}
-
-struct BrlcadRegionAppearance
-{
-  std::vector<vec4f> colors;
-  std::vector<ospray::cpp::Material> materials;
-};
-
-std::optional<BrlcadRegionAppearance> buildBrlcadRegionAppearance(
-    const std::string &path, const std::string &topObject)
-{
-  logBrlcadDebug("appearance: begin path='%s' object='%s'\n",
-      path.c_str(),
-      topObject.c_str());
-  rt_i *rtip = rt_dirbuild(path.c_str(), nullptr, 0);
-  if (!rtip) {
-    logBrlcadDebug("appearance: rt_dirbuild failed\n");
-    return std::nullopt;
-  }
-  logBrlcadDebug("appearance: rt_dirbuild ok nregions=%zu\n", size_t(rtip->nregions));
-
-  std::string objectName = topObject.empty() ? "all" : topObject;
-  const char *object = objectName.c_str();
-  if (rt_gettrees(rtip, 1, &object, 1) < 0) {
-    logBrlcadDebug("appearance: rt_gettrees failed for '%s'\n", object);
-    rt_free_rti(rtip);
-    return std::nullopt;
-  }
-  logBrlcadDebug("appearance: rt_gettrees ok\n");
-
-  rt_prep_parallel(rtip, 1);
-  logBrlcadDebug("appearance: rt_prep_parallel ok\n");
-
-  size_t slotCount = 1;
-  if (rtip->Regions && rtip->nregions > 0) {
-    for (size_t i = 0; i < rtip->nregions; ++i) {
-      const region *reg = rtip->Regions[i];
-      if (reg && reg->reg_bit >= 0)
-        slotCount = std::max(slotCount, size_t(reg->reg_bit) + 1);
-    }
-  }
-  logBrlcadDebug("appearance: slotCount=%zu\n", slotCount);
-
-  BrlcadRegionAppearance appearance;
-  appearance.colors.assign(slotCount, vec4f(0.8f, 0.8f, 0.8f, 1.0f));
-  size_t validColorCount = 0;
-
-  if (rtip->Regions && rtip->nregions > 0) {
-    for (size_t i = 0; i < rtip->nregions; ++i) {
-      region *reg = rtip->Regions[i];
-      if (!reg || reg->reg_bit < 0)
-        continue;
-
-      rt_region_color_map(reg);
-      if (!reg->reg_mater.ma_color_valid)
-        continue;
-
-      const size_t slot = size_t(reg->reg_bit);
-      appearance.colors[slot] = vec4f(reg->reg_mater.ma_color[0],
-          reg->reg_mater.ma_color[1],
-          reg->reg_mater.ma_color[2],
-          1.0f);
-      logBrlcadDebug("appearance: slot=%zu color=(%.3f, %.3f, %.3f)\n",
-          slot,
-          reg->reg_mater.ma_color[0],
-          reg->reg_mater.ma_color[1],
-          reg->reg_mater.ma_color[2]);
-      ++validColorCount;
-    }
-  }
-  logBrlcadDebug("appearance: validColorCount=%zu\n", validColorCount);
-
-  appearance.materials.reserve(appearance.colors.size());
-  for (const auto &color : appearance.colors) {
-    ospray::cpp::Material material("obj");
-    material.setParam("kd", vec3f(color.x, color.y, color.z));
-    material.commit();
-    appearance.materials.push_back(material);
-  }
-  logBrlcadDebug("appearance: created %zu materials\n", appearance.materials.size());
-
-  rt_free_rti(rtip);
-  logBrlcadDebug("appearance: finished\n");
-  return appearance;
 }
 
 void configureRendererInstance(ospray::cpp::Renderer &renderer,
@@ -380,11 +282,11 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
     const int maxAccumulationFrames = maxAccumulationFramesForCurrentMode();
     const bool fullResAccumOnly = fullResAccumulationOnlyForCurrentMode();
     const bool lowQualityOnInteract = lowQualityWhileInteractingForCurrentMode();
+    const bool interactingFastPath = isInteracting_ && lowQualityOnInteract;
     const int configuredAo = configuredAoSamplesForCurrentMode();
     const int configuredPixel = configuredPixelSamplesForCurrentMode();
-    const int interactionAo = (isInteracting_ && lowQualityOnInteract) ? 0 : configuredAo;
-    const int interactionPixel =
-        (isInteracting_ && lowQualityOnInteract) ? 1 : configuredPixel;
+    const int interactionAo = interactingFastPath ? 0 : configuredAo;
+    const int interactionPixel = interactingFastPath ? 1 : configuredPixel;
     dynamicModeActive_ = (settingsMode_ == SettingsMode::Automatic);
     const int backoffAo = std::max(0, interactionAo - aoBackoffSteps_);
     const int effectiveAoSamples = (passScale_ > 1) ? 0 : backoffAo;
@@ -392,7 +294,7 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
         (passScale_ > 1) ? 1 : std::max(1, interactionPixel);
     applyRendererSamplingParams(effectiveAoSamples, effectivePixelSamples);
 
-    if (passScale_ <= 1 && accumFb_.handle() && accumulationEnabled) {
+    if (passScale_ <= 1 && accumFb_.handle() && accumulationEnabled && !interactingFastPath) {
       if (maxAccumulationFrames > 0
           && accumulatedFrames_ >= uint64_t(maxAccumulationFrames)) {
         return false;
@@ -419,6 +321,16 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
 float OsprayBackend::lastFrameTimeMs() const
 {
   return lastFrameTimeMs_;
+}
+
+float OsprayBackend::lastMapCopyTimeMs() const
+{
+  return lastMapCopyTimeMs_;
+}
+
+float OsprayBackend::lastUpsampleTimeMs() const
+{
+  return lastUpsampleTimeMs_;
 }
 
 float OsprayBackend::renderFPS() const
@@ -465,8 +377,8 @@ float OsprayBackend::getBoundsRadius() const
 
 void OsprayBackend::loadTestMesh()
 {
-  brlcadColorData_ = ospray::cpp::CopiedData();
-  brlcadMaterialData_ = ospray::cpp::CopiedData();
+  currentBrlcadPath_.clear();
+  currentBrlcadObject_.clear();
   std::vector<vec3f> vertex = {vec3f(-1.0f, -1.0f, 3.0f),
       vec3f(-1.0f, 1.0f, 3.0f),
       vec3f(1.0f, -1.0f, 3.0f),
@@ -535,8 +447,8 @@ bool OsprayBackend::loadObj(const std::string &path)
   }
 
   lastError_.clear();
-  brlcadColorData_ = ospray::cpp::CopiedData();
-  brlcadMaterialData_ = ospray::cpp::CopiedData();
+  currentBrlcadPath_.clear();
+  currentBrlcadObject_.clear();
   try {
     tinyobj::ObjReader reader;
     tinyobj::ObjReaderConfig config;
@@ -664,87 +576,51 @@ bool OsprayBackend::loadBrlcad(
   }
 
   lastError_.clear();
-  brlcadColorData_ = ospray::cpp::CopiedData();
-  brlcadMaterialData_ = ospray::cpp::CopiedData();
+  currentBrlcadPath_ = path;
+  currentBrlcadObject_ = topObject;
   try {
-  resetBrlcadDebugLogs();
-  logBrlcadDebug("----- BRL-CAD load begin -----\n");
-  std::string moduleError;
+    std::string moduleError;
   if (!ensureBrlcadModuleLoaded(moduleError)) {
     setError(moduleError);
     return false;
   }
 
-  fprintf(stderr, "loadBrlcad: START\n");
-  fprintf(stderr, "loadBrlcad: path = %s\n", path.c_str());
-  fprintf(stderr, "loadBrlcad: object = %s\n", topObject.c_str());
-
-  logBrlcadDebug("loadBrlcad: building appearance\n");
-  const auto appearance = buildBrlcadRegionAppearance(path, topObject);
-  logBrlcadDebug("loadBrlcad: appearance ready hasAppearance=%d\n", appearance.has_value() ? 1 : 0);
-
-  // STEP 1: Create geometry
-  fprintf(stderr, "STEP 1: Creating OSPRay brlcad geometry\n");
-
   OSPGeometry rawGeom = ospNewGeometry("brlcad");
-  fprintf(stderr, "geom handle = %p\n", (void *)rawGeom);
-  fflush(stderr);
 
   if (!rawGeom) {
     setError("OSPRay could not create geometry type 'brlcad'. "
              "The BRL-CAD module loaded, but the active device did not create the custom geometry.");
-    fprintf(stderr, "ERROR: %s\n", lastError_.c_str());
     return false;
   }
 
   ospray::cpp::Geometry geom(rawGeom);
 
-  fprintf(stderr, "STEP 2: Setting filename param\n");
   geom.setParam("filename", path);
 
   if (!topObject.empty()) {
-    fprintf(stderr, "STEP 3: Setting objects param\n");
     geom.setParam("objects", topObject);
   }
 
-  fprintf(stderr, "STEP 4: Committing geometry\n");
+  geom.setParam("colorEnabled", brlcadColorEnabled_);
   geom.commit(); // 🔥 VERY LIKELY CRASH POINT
-  fprintf(stderr, "STEP 4 DONE\n");
 
-  // STEP 5: Bounds calculation
-  fprintf(stderr, "STEP 5: Default bounds\n");
   boundsMin_ = vec3f(-1.f, -1.f, -1.f);
   boundsMax_ = vec3f(1.f, 1.f, 1.f);
 
-  fprintf(stderr, "STEP 11: Creating GeometricModel\n");
   ospray::cpp::GeometricModel gmodel(geom);
-  if (appearance) {
-    brlcadColorData_ = ospray::cpp::CopiedData(appearance->colors);
-    brlcadMaterialData_ = ospray::cpp::CopiedData(appearance->materials);
-    gmodel.setParam("color", brlcadColorData_);
-    gmodel.setParam("material", brlcadMaterialData_);
-  }
   gmodel.commit();
 
-  fprintf(stderr, "STEP 12: Creating Group\n");
   ospray::cpp::Group group;
 
   std::vector<ospray::cpp::GeometricModel> models = {gmodel};
   group.setParam("geometry", ospray::cpp::CopiedData(models));
-  fprintf(stderr, "STEP 12: Creating Group - set param\n");
   group.commit();
-  fprintf(stderr, "STEP 12: Creating Group - commit\n");
-
-
-  fprintf(stderr, "STEP 13: Creating Instance\n");
   ospray::cpp::Instance instance(group);
   instance.commit();
 
-  fprintf(stderr, "STEP 14: Creating World\n");
   world_ = ospray::cpp::World();
   world_.setParam("instance", ospray::cpp::CopiedData(instance));
 
-  fprintf(stderr, "STEP 15: Adding light\n");
   std::vector<ospray::cpp::Light> lights;
 
   ospray::cpp::Light ambient("ambient");
@@ -759,10 +635,8 @@ bool OsprayBackend::loadBrlcad(
   lights.push_back(distant);
   world_.setParam("light", ospray::cpp::CopiedData(lights));
 
-  fprintf(stderr, "STEP 16: Commit world\n");
   world_.commit();
 
-  fprintf(stderr, "STEP 16B: Reading world bounds\n");
   const OSPBounds worldBounds = ospGetBounds(world_.handle());
   if (std::isfinite(worldBounds.lower[0]) && std::isfinite(worldBounds.lower[1])
       && std::isfinite(worldBounds.lower[2]) && std::isfinite(worldBounds.upper[0])
@@ -771,22 +645,9 @@ bool OsprayBackend::loadBrlcad(
         vec3f(worldBounds.lower[0], worldBounds.lower[1], worldBounds.lower[2]);
     boundsMax_ =
         vec3f(worldBounds.upper[0], worldBounds.upper[1], worldBounds.upper[2]);
-    fprintf(stderr,
-        "STEP 16B DONE: min=(%f,%f,%f) max=(%f,%f,%f)\n",
-        boundsMin_.x,
-        boundsMin_.y,
-        boundsMin_.z,
-        boundsMax_.x,
-        boundsMax_.y,
-        boundsMax_.z);
-  } else {
-    fprintf(stderr, "STEP 16B: world bounds unavailable, using defaults\n");
   }
 
-  fprintf(stderr, "STEP 17: Reset accumulation\n");
   resetAccumulation();
-
-  fprintf(stderr, "loadBrlcad: SUCCESS\n");
 
   return true;
   } catch (const std::exception &e) {
@@ -1021,12 +882,42 @@ void OsprayBackend::setInteracting(bool interacting)
   if (isInteracting_ == interacting)
     return;
   isInteracting_ = interacting;
+  interactionRecoveryDeadline_ = std::chrono::steady_clock::time_point{};
   resetAccumulation();
+}
+
+void OsprayBackend::setBrlcadColorEnabled(bool enabled)
+{
+  if (brlcadColorEnabled_ == enabled)
+    return;
+  brlcadColorEnabled_ = enabled;
+  if (!currentBrlcadPath_.empty())
+    loadBrlcad(currentBrlcadPath_, currentBrlcadObject_);
+}
+
+bool OsprayBackend::brlcadColorEnabled() const
+{
+  return brlcadColorEnabled_;
 }
 
 int OsprayBackend::currentScale() const
 {
   return passScale_;
+}
+
+bool OsprayBackend::isInteracting() const
+{
+  return isInteracting_;
+}
+
+int OsprayBackend::appliedAoSamples() const
+{
+  return appliedAoSamples_;
+}
+
+int OsprayBackend::appliedPixelSamples() const
+{
+  return appliedPixelSamples_;
 }
 
 bool OsprayBackend::dynamicModeActive() const
@@ -1085,6 +976,25 @@ int OsprayBackend::startScaleForCurrentMode() const
   switch (automaticPreset_) {
   case AutomaticPreset::Fast:
     return 16;
+  case AutomaticPreset::Balanced:
+    return 8;
+  case AutomaticPreset::Quality:
+    return 4;
+  }
+  return 8;
+}
+
+int OsprayBackend::interactionStartScaleForCurrentMode() const
+{
+  if (settingsMode_ == SettingsMode::Custom) {
+    if (!customLowQualityWhileInteracting_)
+      return customStartScale_;
+    return std::max(customStartScale_, 8);
+  }
+
+  switch (automaticPreset_) {
+  case AutomaticPreset::Fast:
+    return 8;
   case AutomaticPreset::Balanced:
     return 8;
   case AutomaticPreset::Quality:
@@ -1176,7 +1086,10 @@ void OsprayBackend::cancelInFlightFrame()
 void OsprayBackend::resetProgressiveState(bool clearDisplay)
 {
   renderPhase_ = RenderPhase::Progressive;
-  currentScaleIndex_ = scaleToIndex(startScaleForCurrentMode());
+  const bool useInteractionScale =
+      isInteracting_ && lowQualityWhileInteractingForCurrentMode();
+  currentScaleIndex_ = scaleToIndex(
+      useInteractionScale ? interactionStartScaleForCurrentMode() : startScaleForCurrentMode());
   slowPassStreak_ = 0;
   passScale_ = kProgressiveScales[currentScaleIndex_];
   const int targetW = std::max(1, (fbW_ + passScale_ - 1) / passScale_);
@@ -1275,24 +1188,36 @@ bool OsprayBackend::finishCompletedRender()
     ++watchdogCancelCount_;
 
   bool updatedImage = false;
+  lastMapCopyTimeMs_ = 0.0f;
+  lastUpsampleTimeMs_ = 0.0f;
 
   if (renderPhase_ == RenderPhase::Progressive) {
+    const auto mapStart = std::chrono::steady_clock::now();
     void *mapped = passFb_.map(OSP_FB_COLOR);
     std::memcpy(passPixels_.data(),
         mapped,
         size_t(passW_) * size_t(passH_) * sizeof(uint32_t));
     passFb_.unmap(mapped);
+    const auto mapEnd = std::chrono::steady_clock::now();
+    lastMapCopyTimeMs_ = std::chrono::duration<float, std::milli>(mapEnd - mapStart).count();
 
+    const auto upsampleStart = std::chrono::steady_clock::now();
     upsamplePassToDisplay();
+    const auto upsampleEnd = std::chrono::steady_clock::now();
+    lastUpsampleTimeMs_ =
+        std::chrono::duration<float, std::milli>(upsampleEnd - upsampleStart).count();
     ++accumulatedFrames_;
     updatedImage = true;
     beginNextProgressivePass();
   } else {
+    const auto mapStart = std::chrono::steady_clock::now();
     void *mapped = accumFb_.map(OSP_FB_COLOR);
     std::memcpy(displayPixels_.data(),
         mapped,
         displayPixels_.size() * sizeof(uint32_t));
     accumFb_.unmap(mapped);
+    const auto mapEnd = std::chrono::steady_clock::now();
+    lastMapCopyTimeMs_ = std::chrono::duration<float, std::milli>(mapEnd - mapStart).count();
     ++accumulatedFrames_;
     updatedImage = true;
   }

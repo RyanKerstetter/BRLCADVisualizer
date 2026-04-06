@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include <thread>
 
 #include <ospray/ospray_cpp/ext/rkcommon.h>
@@ -109,8 +110,21 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   rkcommon::math::vec3f sceneBoundsCenter() const;
   float sceneBoundsMaxExtent() const;
   void renderOnce();
+  void scheduleWorkerFrameRequest();
+  void applyWorkerFrameResult(
+      uint64_t generation, const RenderWorkerClient::FrameResult &frame);
+  void invalidateWorkerFrameRequests();
   void advanceRender();
   void startAsyncLoad(const std::function<void()> &loader, const QString &statusText);
+  void setInteractionState(bool interacting);
+
+  struct PendingWorkerCameraState
+  {
+    rkcommon::math::vec3f eye{0.f, 0.f, 0.f};
+    rkcommon::math::vec3f center{0.f, 0.f, 0.f};
+    rkcommon::math::vec3f up{0.f, 0.f, 1.f};
+    float fovyDeg = 60.f;
+  };
 
   static float clampf(float v, float lo, float hi);
   static rkcommon::math::vec3f normalizeVec(const rkcommon::math::vec3f &v);
@@ -158,6 +172,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   QStringList currentBrlcadObjects_;
   QString currentModelPath_;
   bool currentSceneIsObj_ = false;
+  bool brlcadColorEnabled_ = true;
   QString currentRenderer_ = QStringLiteral("scivis");
   RenderWorkerClient::RenderSettingsState workerSettings_;
   rkcommon::math::vec3f sceneBoundsMin_{-1.f, -1.f, -1.f};
@@ -165,11 +180,35 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   QString lastError_;
   QString loadStatusText_;
   float workerLastFrameTimeMs_ = 0.0f;
+  float workerMapCopyTimeMs_ = 0.0f;
+  float workerUpsampleTimeMs_ = 0.0f;
+  float workerRequestRoundTripMs_ = 0.0f;
+  float workerImageDecodeCopyMs_ = 0.0f;
+  float uiPaintTimeMs_ = 0.0f;
   float workerRenderFPS_ = 0.0f;
+  int workerCurrentScale_ = 1;
+  int workerAppliedAoSamples_ = 0;
+  int workerAppliedPixelSamples_ = 1;
+  bool workerInteracting_ = false;
+  uint64_t workerBrlcadTraceCalls_ = 0;
+  uint64_t workerBrlcadIntersectCalls_ = 0;
+  uint64_t workerBrlcadRaysTested_ = 0;
+  float workerBrlcadTraceTimeMs_ = 0.0f;
   uint64_t workerAccumulatedFrames_ = 0;
   uint64_t workerWatchdogCancels_ = 0;
   uint64_t workerAoAutoReductions_ = 0;
+  bool interacting_ = false;
+  bool workerInteractionStateKnown_ = false;
+  bool workerInteractionState_ = false;
+  std::mutex workerControlMutex_;
+  PendingWorkerCameraState pendingWorkerCameraState_;
+  bool pendingWorkerCameraDirty_ = false;
+  bool pendingWorkerResetAccumulation_ = false;
+  std::atomic<bool> workerFrameRequestInFlight_{false};
+  std::atomic<uint64_t> workerFrameGeneration_{1};
+  std::atomic<bool> shuttingDown_{false};
   std::atomic<bool> sceneLoadInProgress_{false};
+  std::thread workerFrameThread_;
   std::thread sceneLoadThread_;
   RenderWorkerClient *renderWorkerClient_ = nullptr;
 };

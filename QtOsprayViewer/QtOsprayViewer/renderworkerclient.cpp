@@ -6,6 +6,7 @@
 #include <QProcess>
 #include <QThread>
 
+#include <chrono>
 #include <cstring>
 #include <string>
 
@@ -169,6 +170,10 @@ QString RenderWorkerClient::messageTypeLabel(uint32_t type) const
     return QStringLiteral("set renderer");
   case ibrt::ipc::MessageType::SetRenderSettings:
     return QStringLiteral("set render settings");
+  case ibrt::ipc::MessageType::SetInteracting:
+    return QStringLiteral("set interacting");
+  case ibrt::ipc::MessageType::SetBrlcadColorEnabled:
+    return QStringLiteral("set BRL-CAD color enabled");
   }
   return QStringLiteral("unknown request");
 }
@@ -442,29 +447,72 @@ bool RenderWorkerClient::setRenderSettings(const RenderSettingsState &settings)
 #endif
 }
 
+bool RenderWorkerClient::setInteracting(bool interacting)
+{
+#ifndef _WIN32
+  Q_UNUSED(interacting);
+  return false;
+#else
+  const uint32_t payloadValue = interacting ? 1u : 0u;
+  std::string response;
+  return sendRequestBytes(static_cast<uint32_t>(ibrt::ipc::MessageType::SetInteracting),
+      std::string(reinterpret_cast<const char *>(&payloadValue), sizeof(payloadValue)),
+      &response);
+#endif
+}
+
+bool RenderWorkerClient::setBrlcadColorEnabled(bool enabled)
+{
+#ifndef _WIN32
+  Q_UNUSED(enabled);
+  return false;
+#else
+  const uint32_t payloadValue = enabled ? 1u : 0u;
+  std::string response;
+  return sendRequestBytes(
+      static_cast<uint32_t>(ibrt::ipc::MessageType::SetBrlcadColorEnabled),
+      std::string(reinterpret_cast<const char *>(&payloadValue), sizeof(payloadValue)),
+      &response);
+#endif
+}
+
 RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
 {
   FrameResult result;
 #ifndef _WIN32
   return result;
 #else
+  const auto requestStart = std::chrono::steady_clock::now();
   std::string payload;
   if (!sendRequestBytes(static_cast<uint32_t>(ibrt::ipc::MessageType::RequestFrame),
           std::string(),
           &payload)) {
     return result;
   }
+  const auto requestEnd = std::chrono::steady_clock::now();
+  result.requestRoundTripMs =
+      std::chrono::duration<float, std::milli>(requestEnd - requestStart).count();
 
   struct FrameHeader
   {
     uint32_t width;
     uint32_t height;
     float frameTimeMs;
+    float mapCopyTimeMs;
+    float upsampleTimeMs;
     float renderFPS;
+    int32_t currentScale;
+    int32_t appliedAoSamples;
+    int32_t appliedPixelSamples;
     uint32_t updated;
+    uint32_t interacting;
     uint64_t accumulatedFrames;
     uint64_t watchdogCancels;
     uint64_t aoAutoReductions;
+    uint64_t brlcadTraceCalls;
+    uint64_t brlcadIntersectCalls;
+    uint64_t brlcadRaysTested;
+    float brlcadTraceTimeMs;
     uint32_t rendererNameSize;
   };
 
@@ -479,11 +527,25 @@ RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
     return result;
   }
 
-  QImage image(header.width, header.height, QImage::Format_RGBA8888);
+  const auto imageCopyStart = std::chrono::steady_clock::now();
+  QImage image(header.width, header.height, QImage::Format_ARGB32);
   std::memcpy(image.bits(), payload.data() + sizeof(FrameHeader), size_t(pixelBytes));
+  const auto imageCopyEnd = std::chrono::steady_clock::now();
   result.image = image;
   result.frameTimeMs = header.frameTimeMs;
+  result.mapCopyTimeMs = header.mapCopyTimeMs;
+  result.upsampleTimeMs = header.upsampleTimeMs;
+  result.imageDecodeCopyMs =
+      std::chrono::duration<float, std::milli>(imageCopyEnd - imageCopyStart).count();
   result.renderFPS = header.renderFPS;
+  result.currentScale = header.currentScale;
+  result.appliedAoSamples = header.appliedAoSamples;
+  result.appliedPixelSamples = header.appliedPixelSamples;
+  result.interacting = header.interacting != 0;
+  result.brlcadTraceCalls = header.brlcadTraceCalls;
+  result.brlcadIntersectCalls = header.brlcadIntersectCalls;
+  result.brlcadRaysTested = header.brlcadRaysTested;
+  result.brlcadTraceTimeMs = header.brlcadTraceTimeMs;
   result.updated = header.updated != 0;
   result.accumulatedFrames = header.accumulatedFrames;
   result.watchdogCancels = header.watchdogCancels;
@@ -609,7 +671,9 @@ bool RenderWorkerClient::sendRequestBytes(
           || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetCamera)
           || type == static_cast<uint32_t>(ibrt::ipc::MessageType::ResetAccumulation)
           || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderer)
-          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderSettings))
+          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderSettings)
+          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetInteracting)
+          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetBrlcadColorEnabled))
       && response.type != ibrt::ipc::MessageType::LoadResult) {
     lastError_ = QStringLiteral("Unexpected response to render control request.");
     return false;

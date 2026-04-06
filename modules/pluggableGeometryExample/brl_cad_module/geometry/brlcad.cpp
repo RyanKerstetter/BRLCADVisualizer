@@ -17,6 +17,7 @@
 #include "brlcad.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <limits>
 #include <sstream>
@@ -35,6 +36,23 @@ extern "C" void *BRLCAD_intersect_addr();
 
 namespace ospray {
 namespace brlcad {
+
+namespace {
+
+struct BrlcadProfilerTotals
+{
+  uint64_t traceCalls = 0;
+  uint64_t intersectCalls = 0;
+  uint64_t raysTested = 0;
+  uint64_t traceNanoseconds = 0;
+};
+
+static std::atomic<uint64_t> g_traceCalls{0};
+static std::atomic<uint64_t> g_intersectCalls{0};
+static std::atomic<uint64_t> g_raysTested{0};
+static std::atomic<uint64_t> g_traceNanoseconds{0};
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Thread-local CPU index for per-thread BRL-CAD resources
@@ -194,6 +212,7 @@ static int missCallback(application * /*ap*/)
 
 static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit, unsigned int geomID)
 {
+  const auto traceStart = std::chrono::steady_clock::now();
   auto &ray = rayhit.ray;
   auto &hit = rayhit.hit;
   application ap;
@@ -223,6 +242,12 @@ static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit, unsigned int geomID)
   hit.primID = RTC_INVALID_GEOMETRY_ID;
 
   auto didHit = rt_shootray(&ap);
+  const auto traceEnd = std::chrono::steady_clock::now();
+  g_traceCalls.fetch_add(1, std::memory_order_relaxed);
+  g_traceNanoseconds.fetch_add(
+      static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(traceEnd - traceStart).count()),
+      std::memory_order_relaxed);
   if (didHit <= 0) {
     hit.geomID = RTC_INVALID_GEOMETRY_ID;
     hit.primID = RTC_INVALID_GEOMETRY_ID;
@@ -264,6 +289,8 @@ extern "C" void brlcadIntersectN_C(void *self,
 
   const unsigned int N = args->N;
   const unsigned int geomID = args->geomID;
+  g_intersectCalls.fetch_add(1, std::memory_order_relaxed);
+  g_raysTested.fetch_add(N, std::memory_order_relaxed);
 
   if (isOcclusionTest) {
     // args was actually RTCOccludedFunctionNArguments* cast to intersect args.
@@ -341,6 +368,22 @@ size_t BRLCAD::numPrimitives() const
   return rtip ? std::max<size_t>(regionColors.size(), 1) : 0;
 }
 
+#ifdef _WIN32
+#define BRLCAD_PROFILE_EXPORT __declspec(dllexport)
+#else
+#define BRLCAD_PROFILE_EXPORT __attribute__((visibility("default")))
+#endif
+
+extern "C" BRLCAD_PROFILE_EXPORT void brlcadProfileSnapshot(BrlcadProfilerTotals *outTotals)
+{
+  if (!outTotals)
+    return;
+  outTotals->traceCalls = g_traceCalls.load(std::memory_order_relaxed);
+  outTotals->intersectCalls = g_intersectCalls.load(std::memory_order_relaxed);
+  outTotals->raysTested = g_raysTested.load(std::memory_order_relaxed);
+  outTotals->traceNanoseconds = g_traceNanoseconds.load(std::memory_order_relaxed);
+}
+
 void BRLCAD::commit()
 {
   getSh()->super.type = ispc::GEOMETRY_TYPE_UNKNOWN;
@@ -358,14 +401,13 @@ void BRLCAD::commit()
     rtip = nullptr;
   }
   regionColors.clear();
-  regionMaterialRefs.clear();
-  regionMaterialShs.clear();
 
   const std::string filename = getParam<std::string>("filename", "");
   if (filename.empty())
     throw std::runtime_error("BRL-CAD geometry requires 'filename' parameter");
 
   std::string objectList = getParam<std::string>("objects", "all");
+  const bool colorEnabled = getParam<bool>("colorEnabled", true);
   const int nThreads = getNumThreads();
 
   rtip = rt_dirbuild(filename.c_str(), nullptr, 0);
@@ -420,18 +462,6 @@ void BRLCAD::commit()
     }
   }
 
-  regionMaterialRefs.reserve(regionColors.size());
-  regionMaterialShs.reserve(regionColors.size());
-  for (size_t i = 0; i < regionColors.size(); ++i) {
-    auto *material = new pathtracer::OBJMaterial(getISPCDevice());
-    material->setParam("kd",
-        rkcommon::math::vec3f(
-            regionColors[i].x, regionColors[i].y, regionColors[i].z));
-    material->commit();
-    regionMaterialRefs.emplace_back(material);
-    regionMaterialShs.push_back(reinterpret_cast<ispc::Material *>(material->getSh()));
-  }
-
   bounds.lower.x = rtip->mdl_min[0];
   bounds.lower.y = rtip->mdl_min[1];
   bounds.lower.z = rtip->mdl_min[2];
@@ -459,8 +489,7 @@ void BRLCAD::commit()
   } else {
     getSh()->regionColors = ispc::Data1D{nullptr, 0, 0, false};
   }
-  getSh()->materials = regionMaterialShs.empty() ? nullptr : regionMaterialShs.data();
-  getSh()->numMaterials = static_cast<uint32_t>(regionMaterialShs.size());
+  getSh()->colorEnabled = colorEnabled ? 1u : 0u;
   createEmbreeUserGeometry((RTCBoundsFunction)brlcadBounds);
 
   getSh()->super.numPrimitives = static_cast<int>(numPrimitives());

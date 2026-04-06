@@ -20,8 +20,6 @@
 #include <vector>
 
 #include "geometry/Geometry.h"
-#include "render/Material.h"
-#include "render/materials/OBJ.h"
 #include "rkcommon/math/box.h"
 #include "rkcommon/math/vec.h"
 
@@ -60,8 +58,6 @@ struct BRLCAD : public AddStructShared<Geometry, ispc::BRLCAD_sh>
   rt_i *rtip{nullptr};
 
   std::vector<rkcommon::math::vec4f> regionColors;
-  std::vector<Ref<Material>> regionMaterialRefs;
-  std::vector<ispc::Material *> regionMaterialShs;
   mutable std::vector<resource> resources;
   std::vector<std::string> objects;
 };

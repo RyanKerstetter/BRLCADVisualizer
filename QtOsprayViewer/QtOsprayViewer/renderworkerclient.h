@@ -26,8 +26,20 @@ class RenderWorkerClient : public QObject
   {
     QImage image;
     float frameTimeMs = 0.0f;
+    float mapCopyTimeMs = 0.0f;
+    float upsampleTimeMs = 0.0f;
+    float requestRoundTripMs = 0.0f;
+    float imageDecodeCopyMs = 0.0f;
     bool updated = false;
     float renderFPS = 0.0f;
+    int currentScale = 1;
+    int appliedAoSamples = 0;
+    int appliedPixelSamples = 1;
+    bool interacting = false;
+    uint64_t brlcadTraceCalls = 0;
+    uint64_t brlcadIntersectCalls = 0;
+    uint64_t brlcadRaysTested = 0;
+    float brlcadTraceTimeMs = 0.0f;
     uint64_t accumulatedFrames = 0;
     uint64_t watchdogCancels = 0;
     uint64_t aoAutoReductions = 0;
@@ -77,6 +89,8 @@ class RenderWorkerClient : public QObject
   bool resetAccumulation();
   bool setRenderer(const QString &rendererType);
   bool setRenderSettings(const RenderSettingsState &settings);
+  bool setInteracting(bool interacting);
+  bool setBrlcadColorEnabled(bool enabled);
   FrameResult requestFrame();
   bool restart();
 
