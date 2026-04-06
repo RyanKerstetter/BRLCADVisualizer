@@ -24,6 +24,16 @@ using rkcommon::math::vec3ui;
 using rkcommon::math::vec4f;
 
 namespace {
+const vec3f kSunLightDirection(-0.3f, -1.0f, -0.2f);
+
+vec3f normalizeDirection(const vec3f &v)
+{
+  const float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+  if (len <= 1e-6f)
+    return vec3f(0.f, -1.f, 0.f);
+  return vec3f(v.x / len, v.y / len, v.z / len);
+}
+
 std::string trimCopy(const std::string &value)
 {
   const auto first = value.find_first_not_of(" \t\r\n");
@@ -64,24 +74,33 @@ std::vector<ospray::cpp::Light> makeDefaultLights(bool forPathTracer)
   if (forPathTracer) {
     // Path tracing needs actual illumination from a light or environment.
     ospray::cpp::Light sunSky("sunSky");
-    sunSky.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
+    sunSky.setParam("direction", kSunLightDirection);
     sunSky.setParam("intensity", 0.35f);
     sunSky.setParam("turbidity", 3.0f);
     sunSky.setParam("albedo", 0.3f);
+    sunSky.setParam("visible", true);
     sunSky.commit();
     lights.push_back(sunSky);
+
+    ospray::cpp::Light distant("distant");
+    distant.setParam("direction", kSunLightDirection);
+    distant.setParam("intensity", 3.0f);
+    distant.setParam("visible", true);
+    distant.setParam("angularDiameter", 0.53f);
+    distant.commit();
+    lights.push_back(distant);
   } else {
     ospray::cpp::Light ambient("ambient");
     ambient.setParam("intensity", 0.25f);
     ambient.commit();
     lights.push_back(ambient);
-  }
 
-  ospray::cpp::Light distant("distant");
-  distant.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
-  distant.setParam("intensity", 3.0f);
-  distant.commit();
-  lights.push_back(distant);
+    ospray::cpp::Light distant("distant");
+    distant.setParam("direction", kSunLightDirection);
+    distant.setParam("intensity", 3.0f);
+    distant.commit();
+    lights.push_back(distant);
+  }
 
   return lights;
 }
@@ -329,7 +348,6 @@ void OsprayBackend::loadTestMesh()
   mesh.commit();
 
   ospray::cpp::GeometricModel model(mesh);
-  applyDefaultMaterial(model);
   model.commit();
 
   ospray::cpp::Group group;
@@ -339,8 +357,9 @@ void OsprayBackend::loadTestMesh()
   ospray::cpp::Instance instance(group);
   instance.commit();
 
+  sceneInstances_ = {instance};
   world_ = ospray::cpp::World();
-  world_.setParam("instance", ospray::cpp::CopiedData(instance));
+  applyWorldInstances();
   applyDefaultLights();
   world_.commit();
 
@@ -433,7 +452,6 @@ bool OsprayBackend::loadObj(const std::string &path)
     mesh.commit();
 
     ospray::cpp::GeometricModel model(mesh);
-    applyDefaultMaterial(model);
     model.commit();
 
     ospray::cpp::Group group;
@@ -443,8 +461,9 @@ bool OsprayBackend::loadObj(const std::string &path)
     ospray::cpp::Instance instance(group);
     instance.commit();
 
+    sceneInstances_ = {instance};
     world_ = ospray::cpp::World();
-    world_.setParam("instance", ospray::cpp::CopiedData(instance));
+    applyWorldInstances();
     applyDefaultLights();
     world_.commit();
 
@@ -532,8 +551,9 @@ bool OsprayBackend::loadBrlcad(
   instance.commit();
 
   fprintf(stderr, "STEP 14: Creating World\n");
+  sceneInstances_ = {instance};
   world_ = ospray::cpp::World();
-  world_.setParam("instance", ospray::cpp::CopiedData(instance));
+  applyWorldInstances();
 
   fprintf(stderr, "STEP 15: Adding light\n");
   applyDefaultLights();
@@ -542,7 +562,7 @@ bool OsprayBackend::loadBrlcad(
   world_.commit();
 
   fprintf(stderr, "STEP 16B: Reading world bounds\n");
-  const OSPBounds worldBounds = ospGetBounds(world_.handle());
+  const OSPBounds worldBounds = ospGetBounds(instance.handle());
   if (std::isfinite(worldBounds.lower[0]) && std::isfinite(worldBounds.lower[1])
       && std::isfinite(worldBounds.lower[2]) && std::isfinite(worldBounds.upper[0])
       && std::isfinite(worldBounds.upper[1]) && std::isfinite(worldBounds.upper[2])) {
@@ -598,6 +618,7 @@ void OsprayBackend::setRenderer(const std::string &type)
     appliedPixelSamples_ = configuredPixelSamplesForCurrentMode();
 
     if (world_.handle()) {
+      applyWorldInstances();
       applyDefaultLights();
       world_.commit();
     }
@@ -1044,6 +1065,11 @@ void OsprayBackend::applyDefaultMaterial(ospray::cpp::GeometricModel &model)
   material.setParam("kd", vec3f(0.8f, 0.8f, 0.8f));
   material.commit();
   model.setParam("material", material);
+}
+
+void OsprayBackend::applyWorldInstances()
+{
+  world_.setParam("instance", ospray::cpp::CopiedData(sceneInstances_));
 }
 
 void OsprayBackend::resetProgressiveState(bool clearDisplay)

@@ -158,6 +158,7 @@ class OsprayBackend
   void applyPendingState();
   void applyDefaultLights();
   void applyDefaultMaterial(ospray::cpp::GeometricModel &model);
+  void applyWorldInstances();
 
   int fbW_ = 1;
   int fbH_ = 1;
@@ -168,6 +169,7 @@ class OsprayBackend
   ospray::cpp::Renderer renderer_;
   ospray::cpp::Camera camera_;
   ospray::cpp::World world_;
+  std::vector<ospray::cpp::Instance> sceneInstances_;
   ospray::cpp::FrameBuffer passFb_;
   ospray::cpp::FrameBuffer accumFb_;
   ospray::cpp::Future currentFrame_;
