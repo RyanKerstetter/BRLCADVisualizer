@@ -111,6 +111,12 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   void syncCameraToBackend();
   bool usingWorkerRenderPath() const;
   void resetAccumulationTargets();
+  void beginInteraction();
+  void scheduleInteractionEnd();
+  void finishInteraction();
+  bool isMovementKey(int key) const;
+  void setMovementKeyState(int key, bool pressed);
+  bool anyMovementKeysDown() const;
   rkcommon::math::vec3f sceneBoundsCenter() const;
   float sceneBoundsMaxExtent() const;
   void renderOnce();
@@ -129,8 +135,11 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   QImage image_;
   QPoint lastMouse_;
   QTimer *renderTimer_ = nullptr;
+  QTimer *interactionDebounceTimer_ = nullptr;
   bool backendReady_ = false;
   int renderBudgetMs_ = 6;
+  bool interactionActive_ = false;
+  static constexpr int kInteractionDebounceMs = 150;
 
   InputMode inputMode_ = InputMode::Orbit;
   UpAxis upAxis_ = UpAxis::Z;
@@ -166,6 +175,12 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   bool currentSceneIsObj_ = false;
   QString currentRenderer_ = QStringLiteral("scivis");
   RenderWorkerClient::RenderSettingsState workerSettings_;
+  bool moveForwardKeyDown_ = false;
+  bool moveLeftKeyDown_ = false;
+  bool moveBackwardKeyDown_ = false;
+  bool moveRightKeyDown_ = false;
+  bool moveDownKeyDown_ = false;
+  bool moveUpKeyDown_ = false;
   rkcommon::math::vec3f sceneBoundsMin_{-1.f, -1.f, -1.f};
   rkcommon::math::vec3f sceneBoundsMax_{1.f, 1.f, 1.f};
   QString lastError_;

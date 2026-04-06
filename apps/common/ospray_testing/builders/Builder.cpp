@@ -211,6 +211,119 @@ cpp::Instance Builder::makeGroundPlane(const box3f &bounds,
   return planeInst;
 }
 
+cpp::Instance Builder::makeConstantZPlane(const box3f &bounds,
+    float zLevel,
+    const vec4f &planeColor,
+    const vec4f &stripeColor) const
+{
+  auto planeExtent = 0.8f * length(bounds.center() - bounds.lower);
+
+  cpp::Geometry planeGeometry("mesh");
+
+  std::vector<vec3f> v_position;
+  std::vector<vec3f> v_normal;
+  std::vector<vec4f> v_color;
+  std::vector<vec4ui> indices;
+
+  unsigned int startingIndex = 0;
+
+  const vec3f normal = vec3f{0.f, 0.f, 1.f};
+
+  v_position.emplace_back(-planeExtent, -planeExtent, zLevel);
+  v_position.emplace_back(planeExtent, -planeExtent, zLevel);
+  v_position.emplace_back(planeExtent, planeExtent, zLevel);
+  v_position.emplace_back(-planeExtent, planeExtent, zLevel);
+
+  v_normal.push_back(normal);
+  v_normal.push_back(normal);
+  v_normal.push_back(normal);
+  v_normal.push_back(normal);
+
+  v_color.push_back(planeColor);
+  v_color.push_back(planeColor);
+  v_color.push_back(planeColor);
+  v_color.push_back(planeColor);
+
+  indices.emplace_back(
+      startingIndex, startingIndex + 1, startingIndex + 2, startingIndex + 3);
+
+  const float stripeWidth = 0.025f;
+  const float paddedExtent = planeExtent + stripeWidth;
+  const size_t numStripes = 10;
+
+  for (size_t i = 0; i < numStripes; i++) {
+    const float coord =
+        -planeExtent + float(i) / float(numStripes - 1) * 2.f * planeExtent;
+
+    const float zLevel1 = zLevel + 1e-3f;
+
+    startingIndex = v_position.size();
+
+    v_position.emplace_back(-paddedExtent, coord - stripeWidth, zLevel1);
+    v_position.emplace_back(paddedExtent, coord - stripeWidth, zLevel1);
+    v_position.emplace_back(paddedExtent, coord + stripeWidth, zLevel1);
+    v_position.emplace_back(-paddedExtent, coord + stripeWidth, zLevel1);
+
+    v_normal.push_back(normal);
+    v_normal.push_back(normal);
+    v_normal.push_back(normal);
+    v_normal.push_back(normal);
+
+    v_color.push_back(stripeColor);
+    v_color.push_back(stripeColor);
+    v_color.push_back(stripeColor);
+    v_color.push_back(stripeColor);
+
+    indices.emplace_back(
+        startingIndex, startingIndex + 1, startingIndex + 2, startingIndex + 3);
+
+    startingIndex = v_position.size();
+
+    const float zLevel2 = zLevel1 + 1e-4f;
+
+    v_position.emplace_back(coord - stripeWidth, -paddedExtent, zLevel2);
+    v_position.emplace_back(coord + stripeWidth, -paddedExtent, zLevel2);
+    v_position.emplace_back(coord + stripeWidth, paddedExtent, zLevel2);
+    v_position.emplace_back(coord - stripeWidth, paddedExtent, zLevel2);
+
+    v_normal.push_back(normal);
+    v_normal.push_back(normal);
+    v_normal.push_back(normal);
+    v_normal.push_back(normal);
+
+    v_color.push_back(stripeColor);
+    v_color.push_back(stripeColor);
+    v_color.push_back(stripeColor);
+    v_color.push_back(stripeColor);
+
+    indices.emplace_back(
+        startingIndex, startingIndex + 1, startingIndex + 2, startingIndex + 3);
+  }
+
+  planeGeometry.setParam("vertex.position", cpp::CopiedData(v_position));
+  planeGeometry.setParam("vertex.normal", cpp::CopiedData(v_normal));
+  planeGeometry.setParam("vertex.color", cpp::CopiedData(v_color));
+  planeGeometry.setParam("index", cpp::CopiedData(indices));
+
+  planeGeometry.commit();
+
+  cpp::GeometricModel plane(planeGeometry);
+
+  cpp::Material material("obj");
+  material.commit();
+  plane.setParam("material", material);
+
+  plane.commit();
+
+  cpp::Group planeGroup;
+  planeGroup.setParam("geometry", cpp::CopiedData(plane));
+  planeGroup.commit();
+
+  cpp::Instance planeInst(planeGroup);
+  planeInst.commit();
+  return planeInst;
+}
+
 void Builder::registerBuilder(const std::string &name, BuilderFcn fcn)
 {
   if (factory.get() == nullptr)

@@ -1056,7 +1056,8 @@ bool OsprayBackend::finishCompletedRender()
     upsamplePassToDisplay();
     ++accumulatedFrames_;
     updatedImage = true;
-    beginNextProgressivePass();
+    if (!isInteracting_)
+      beginNextProgressivePass();
   } else {
     void *mapped = accumFb_.map(OSP_FB_COLOR);
     std::memcpy(displayPixels_.data(),
@@ -1111,7 +1112,8 @@ void OsprayBackend::applyPendingState()
     camera_.setParam("fovy", pendingCameraState_->fovyDeg);
     cameraDirty_ = true;
     pendingCameraState_.reset();
-    pendingResetAccumulation_ = true;
+    if (!isInteracting_)
+      pendingResetAccumulation_ = true;
   }
 
   if (pendingResetAccumulation_) {

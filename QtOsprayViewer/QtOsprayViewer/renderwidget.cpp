@@ -18,11 +18,18 @@ using rkcommon::math::vec3f;
 RenderWidget::RenderWidget(QWidget *parent) : QOpenGLWidget(parent)
 {
   setFocusPolicy(Qt::StrongFocus);
-  
+
   renderTimer_ = new QTimer(this);
   connect(renderTimer_, &QTimer::timeout, this, &RenderWidget::advanceRender);
   renderTimer_->start(16); // progressive render at ~60 Hz
-  
+
+  interactionDebounceTimer_ = new QTimer(this);
+  interactionDebounceTimer_->setSingleShot(true);
+  connect(interactionDebounceTimer_,
+      &QTimer::timeout,
+      this,
+      &RenderWidget::finishInteraction);
+
   setMouseTracking(true);
   setFocusPolicy(Qt::StrongFocus);
 }
@@ -110,7 +117,7 @@ void RenderWidget::applyViewAction(
     dist_ = clampf(dist_, minDist, maxDist);
   }
 
-  resetAccumulationTargets();
+  beginInteraction();
   syncCameraToBackend();
   renderOnce();
 }
@@ -339,6 +346,70 @@ void RenderWidget::resetAccumulationTargets()
   backend_.resetAccumulation();
   if (usingWorkerRenderPath())
     renderWorkerClient_->resetAccumulation();
+}
+
+void RenderWidget::beginInteraction()
+{
+  if (!interactionActive_) {
+    interactionActive_ = true;
+    backend_.setInteracting(true);
+  }
+
+  interactionDebounceTimer_->start(kInteractionDebounceMs);
+}
+
+void RenderWidget::scheduleInteractionEnd()
+{
+  if (!interactionActive_)
+    return;
+  interactionDebounceTimer_->start(kInteractionDebounceMs);
+}
+
+void RenderWidget::finishInteraction()
+{
+  if (!interactionActive_)
+    return;
+
+  interactionActive_ = false;
+  backend_.setInteracting(false);
+}
+
+bool RenderWidget::isMovementKey(int key) const
+{
+  return key == Qt::Key_W || key == Qt::Key_A || key == Qt::Key_S
+      || key == Qt::Key_D || key == Qt::Key_Q || key == Qt::Key_E;
+}
+
+void RenderWidget::setMovementKeyState(int key, bool pressed)
+{
+  switch (key) {
+  case Qt::Key_W:
+    moveForwardKeyDown_ = pressed;
+    break;
+  case Qt::Key_A:
+    moveLeftKeyDown_ = pressed;
+    break;
+  case Qt::Key_S:
+    moveBackwardKeyDown_ = pressed;
+    break;
+  case Qt::Key_D:
+    moveRightKeyDown_ = pressed;
+    break;
+  case Qt::Key_Q:
+    moveDownKeyDown_ = pressed;
+    break;
+  case Qt::Key_E:
+    moveUpKeyDown_ = pressed;
+    break;
+  default:
+    break;
+  }
+}
+
+bool RenderWidget::anyMovementKeysDown() const
+{
+  return moveForwardKeyDown_ || moveLeftKeyDown_ || moveBackwardKeyDown_
+      || moveRightKeyDown_ || moveDownKeyDown_ || moveUpKeyDown_;
 }
 
 vec3f RenderWidget::sceneBoundsCenter() const
@@ -1005,7 +1076,7 @@ void RenderWidget::mousePressEvent(QMouseEvent *e)
   if (ImGui::GetIO().WantCaptureMouse)
     return;
 
-  backend_.setInteracting(true);
+  beginInteraction();
   lastMouse_ = e->pos();
 }
 
@@ -1025,7 +1096,7 @@ void RenderWidget::mouseReleaseEvent(QMouseEvent *e)
   }
 
   if (!(imguiMouseDown_[0] || imguiMouseDown_[1] || imguiMouseDown_[2]))
-    backend_.setInteracting(false);
+    scheduleInteractionEnd();
   update();
 }
 
@@ -1048,7 +1119,8 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
   if (io.WantCaptureMouse)
     return;
 
-  backend_.setInteracting(e->buttons() != Qt::NoButton);
+  if (e->buttons() != Qt::NoButton)
+    beginInteraction();
 
   const QPoint d = e->pos() - lastMouse_;
   lastMouse_ = e->pos();
@@ -1065,7 +1137,6 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
     if (e->buttons() & Qt::LeftButton) {
       rotateOrbit(d.x() * orbitSpeed_, d.y() * orbitSpeed_);
 
-      resetAccumulationTargets();
       syncCameraToBackend();
       renderOnce();
       return;
@@ -1082,7 +1153,6 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
           center_.y - right.y * sx + upCam.y * sy,
           center_.z - right.z * sx + upCam.z * sy);
 
-      resetAccumulationTargets();
       syncCameraToBackend();
       renderOnce();
       return;
@@ -1093,7 +1163,6 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
       flyYaw_ += d.x() * orbitSpeed_;
       flyPitch_ += d.y() * orbitSpeed_;
 
-      resetAccumulationTargets();
       syncCameraToBackend();
       renderOnce();
       return;
@@ -1112,7 +1181,7 @@ void RenderWidget::wheelEvent(QWheelEvent *e)
   if (ImGui::GetIO().WantCaptureMouse)
     return;
 
-  backend_.setInteracting(true);
+  beginInteraction();
 
   float steps = e->angleDelta().y() / 120.f;
   if (steps == 0.f)
@@ -1133,10 +1202,9 @@ void RenderWidget::wheelEvent(QWheelEvent *e)
     fovy_ = clampf(fovy_, 20.f, 90.f);
   }
 
-  resetAccumulationTargets();
   syncCameraToBackend();
   renderOnce();
-  backend_.setInteracting(false);
+  scheduleInteractionEnd();
 }
 
 void RenderWidget::keyPressEvent(QKeyEvent *e)
@@ -1168,18 +1236,18 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
   if (io.WantCaptureKeyboard)
     return;
 
-  if (e->key() == Qt::Key_W || e->key() == Qt::Key_A || e->key() == Qt::Key_S
-      || e->key() == Qt::Key_D || e->key() == Qt::Key_Q || e->key() == Qt::Key_E
-      || e->key() == Qt::Key_Tab) {
-    backend_.setInteracting(true);
-  }
+  if (isMovementKey(e->key()))
+    setMovementKeyState(e->key(), true);
+
+  if (isMovementKey(e->key()) || e->key() == Qt::Key_Tab)
+    beginInteraction();
 
   if (e->key() == Qt::Key_Tab) {
     inputMode_ =
         (inputMode_ == InputMode::Orbit) ? InputMode::Fly : InputMode::Orbit;
-    resetAccumulationTargets();
     syncCameraToBackend();
     renderOnce();
+    scheduleInteractionEnd();
     return;
   }
 
@@ -1220,7 +1288,6 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
         flyPos_.y + worldUp().y * step,
         flyPos_.z + worldUp().z * step);
 
-  resetAccumulationTargets();
   syncCameraToBackend();
   renderOnce();
 }
@@ -1248,11 +1315,11 @@ void RenderWidget::keyReleaseEvent(QKeyEvent *e)
   if (io.WantCaptureKeyboard)
     return;
 
-  if (e->key() == Qt::Key_W || e->key() == Qt::Key_A || e->key() == Qt::Key_S
-      || e->key() == Qt::Key_D || e->key() == Qt::Key_Q || e->key() == Qt::Key_E
-      || e->key() == Qt::Key_Tab) {
-    backend_.setInteracting(false);
-  }
+  if (isMovementKey(e->key()))
+    setMovementKeyState(e->key(), false);
+
+  if (e->key() == Qt::Key_Tab || !anyMovementKeysDown())
+    scheduleInteractionEnd();
 }
 
 void RenderWidget::focusInEvent(QFocusEvent *e)
@@ -1266,6 +1333,14 @@ void RenderWidget::focusOutEvent(QFocusEvent *e)
 {
   Q_UNUSED(e);
   imguiHasFocus_ = false;
+  interactionDebounceTimer_->stop();
+  interactionActive_ = false;
+  moveForwardKeyDown_ = false;
+  moveLeftKeyDown_ = false;
+  moveBackwardKeyDown_ = false;
+  moveRightKeyDown_ = false;
+  moveDownKeyDown_ = false;
+  moveUpKeyDown_ = false;
   if (!sceneLoadInProgress_.load())
     backend_.setInteracting(false);
   update();

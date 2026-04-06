@@ -45,6 +45,10 @@ struct Builder : public memory::RefCountedObject,
   cpp::Instance makeGroundPlane(const box3f &bounds,
       const vec4f &planeColor = vec4f{0.9f, 0.9f, 0.9f, 0.75f},
       const vec4f &stripeColor = vec4f{1.0f, 0.1f, 0.1f, 1.f}) const;
+  cpp::Instance makeConstantZPlane(const box3f &bounds,
+      float zLevel,
+      const vec4f &planeColor = vec4f{0.9f, 0.9f, 0.9f, 0.75f},
+      const vec4f &stripeColor = vec4f{1.0f, 0.1f, 0.1f, 1.f}) const;
 
   // Data //
 

@@ -241,11 +241,8 @@ inline cpp::World PtTex::buildWorld() const
 
   bbox.lower -= .4f;
   bbox.upper += .4f;
-  cpp::Instance planeInstance = makeGroundPlane(
-      bbox, vec4f(.9f, .9f, .9f, 1.f), vec4f(.2f, .2f, .2f, 1.f));
-  planeInstance.setParam(
-      "xfm", affine3f::rotate(vec3f(-1.f, 0.f, 0.f), half_pi));
-  planeInstance.commit();
+  cpp::Instance planeInstance = makeConstantZPlane(
+      bbox, 1.f, vec4f(.9f, .9f, .9f, 1.f), vec4f(.2f, .2f, .2f, 1.f));
   instances.push_back(planeInstance);
 
   world.setParam("instance", cpp::CopiedData(instances));
