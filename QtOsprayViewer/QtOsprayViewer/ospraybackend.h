@@ -145,6 +145,7 @@ class OsprayBackend
       const RenderRequest &request,
       const char *reason = nullptr) const;
   void enqueueLatestRenderRequest(const char *reason);
+  void setProgressiveScale(int scale);
   void resetProgressiveState(bool clearDisplay = false);
   void updateCameraCrop(const rkcommon::math::vec2f &imageStart,
       const rkcommon::math::vec2f &imageEnd);

@@ -183,17 +183,21 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
     const bool lowQualityOnInteract = lowQualityWhileInteractingForCurrentMode();
     const int configuredAo = configuredAoSamplesForCurrentMode();
     const int configuredPixel = configuredPixelSamplesForCurrentMode();
-    const int interactionAo = (isInteracting_ && lowQualityOnInteract) ? 0 : configuredAo;
-    const int interactionPixel =
-        (isInteracting_ && lowQualityOnInteract) ? 1 : configuredPixel;
+    const bool fixedPreviewMode = isInteracting_ && lowQualityOnInteract;
+    const int interactionAo = fixedPreviewMode ? 0 : configuredAo;
+    const int interactionPixel = fixedPreviewMode ? 1 : configuredPixel;
     dynamicModeActive_ = (settingsMode_ == SettingsMode::Automatic);
+    if (fixedPreviewMode) {
+      renderPhase_ = RenderPhase::Progressive;
+      setProgressiveScale(16);
+    }
     const int backoffAo = std::max(0, interactionAo - aoBackoffSteps_);
     const int effectiveAoSamples = (passScale_ > 1) ? 0 : backoffAo;
     const int effectivePixelSamples =
         (passScale_ > 1) ? 1 : std::max(1, interactionPixel);
     applyRendererSamplingParams(effectiveAoSamples, effectivePixelSamples);
 
-    if (passScale_ <= 1 && accumFb_.handle() && accumulationEnabled) {
+    if (!fixedPreviewMode && passScale_ <= 1 && accumFb_.handle() && accumulationEnabled) {
       if (maxAccumulationFrames > 0
           && accumulatedFrames_ >= uint64_t(maxAccumulationFrames)) {
         return false;
@@ -1012,11 +1016,11 @@ void OsprayBackend::enqueueLatestRenderRequest(const char *reason)
   logRenderRequest("request", request, reason);
 }
 
-void OsprayBackend::resetProgressiveState(bool clearDisplay)
+void OsprayBackend::setProgressiveScale(int scale)
 {
   renderPhase_ = RenderPhase::Progressive;
-  currentScaleIndex_ = scaleToIndex(startScaleForCurrentMode());
-  slowPassStreak_ = 0;
+  currentScaleIndex_ = scaleToIndex(scale);
+  progressiveFramesAtCurrentScale_ = 0;
   passScale_ = kProgressiveScales[currentScaleIndex_];
   const int targetW = std::max(1, (fbW_ + passScale_ - 1) / passScale_);
   const int targetH = std::max(1, (fbH_ + passScale_ - 1) / passScale_);
@@ -1029,6 +1033,12 @@ void OsprayBackend::resetProgressiveState(bool clearDisplay)
     passPixels_.assign(size_t(passW_) * size_t(passH_), 0u);
     passFb_ = ospray::cpp::FrameBuffer();
   }
+}
+
+void OsprayBackend::resetProgressiveState(bool clearDisplay)
+{
+  setProgressiveScale(startScaleForCurrentMode());
+  slowPassStreak_ = 0;
   accumulatedFrames_ = 0;
   lastFrameTimeMs_ = 0.0f;
   slowFrameStreak_ = 0;
