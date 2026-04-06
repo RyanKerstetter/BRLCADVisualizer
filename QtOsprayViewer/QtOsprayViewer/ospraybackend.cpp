@@ -57,14 +57,25 @@ bool ensureBrlcadModuleLoaded(std::string &errorOut)
   return loaded;
 }
 
-std::vector<ospray::cpp::Light> makeDefaultLights()
+std::vector<ospray::cpp::Light> makeDefaultLights(bool forPathTracer)
 {
   std::vector<ospray::cpp::Light> lights;
 
-  ospray::cpp::Light ambient("ambient");
-  ambient.setParam("intensity", 0.25f);
-  ambient.commit();
-  lights.push_back(ambient);
+  if (forPathTracer) {
+    // Path tracing needs actual illumination from a light or environment.
+    ospray::cpp::Light sunSky("sunSky");
+    sunSky.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
+    sunSky.setParam("intensity", 0.35f);
+    sunSky.setParam("turbidity", 3.0f);
+    sunSky.setParam("albedo", 0.3f);
+    sunSky.commit();
+    lights.push_back(sunSky);
+  } else {
+    ospray::cpp::Light ambient("ambient");
+    ambient.setParam("intensity", 0.25f);
+    ambient.commit();
+    lights.push_back(ambient);
+  }
 
   ospray::cpp::Light distant("distant");
   distant.setParam("direction", vec3f(-0.3f, -1.0f, -0.2f));
@@ -318,6 +329,7 @@ void OsprayBackend::loadTestMesh()
   mesh.commit();
 
   ospray::cpp::GeometricModel model(mesh);
+  applyDefaultMaterial(model);
   model.commit();
 
   ospray::cpp::Group group;
@@ -421,6 +433,7 @@ bool OsprayBackend::loadObj(const std::string &path)
     mesh.commit();
 
     ospray::cpp::GeometricModel model(mesh);
+    applyDefaultMaterial(model);
     model.commit();
 
     ospray::cpp::Group group;
@@ -501,6 +514,7 @@ bool OsprayBackend::loadBrlcad(
 
   fprintf(stderr, "STEP 11: Creating GeometricModel\n");
   ospray::cpp::GeometricModel gmodel(geom);
+  applyDefaultMaterial(gmodel);
   gmodel.commit();
 
   fprintf(stderr, "STEP 12: Creating Group\n");
@@ -582,6 +596,11 @@ void OsprayBackend::setRenderer(const std::string &type)
     renderer_.commit();
     appliedAoSamples_ = configuredAoSamplesForCurrentMode();
     appliedPixelSamples_ = configuredPixelSamplesForCurrentMode();
+
+    if (world_.handle()) {
+      applyDefaultLights();
+      world_.commit();
+    }
 
     resetAccumulation();
     enqueueLatestRenderRequest("renderer");
@@ -1015,7 +1034,16 @@ void OsprayBackend::setProgressiveScale(int scale)
 
 void OsprayBackend::applyDefaultLights()
 {
-  world_.setParam("light", ospray::cpp::CopiedData(makeDefaultLights()));
+  world_.setParam("light",
+      ospray::cpp::CopiedData(makeDefaultLights(currentRenderer_ == "pathtracer")));
+}
+
+void OsprayBackend::applyDefaultMaterial(ospray::cpp::GeometricModel &model)
+{
+  ospray::cpp::Material material("obj");
+  material.setParam("kd", vec3f(0.8f, 0.8f, 0.8f));
+  material.commit();
+  model.setParam("material", material);
 }
 
 void OsprayBackend::resetProgressiveState(bool clearDisplay)
