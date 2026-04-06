@@ -552,13 +552,35 @@ void RenderWidget::paintGL()
     return;
   }
 
-  ImGui::Begin("Interactive BRL-CAD Raytracer");
+  const ImVec2 displaySize = io.DisplaySize;
+  const float overlayMargin = 16.0f;
+  const float minOverlayWidth = 360.0f;
+  const float minOverlayHeight = 320.0f;
+  const float maxOverlayWidth =
+      std::max(minOverlayWidth, displaySize.x - overlayMargin * 2.0f);
+  const float maxOverlayHeight =
+      std::max(minOverlayHeight, displaySize.y - overlayMargin * 2.0f);
+  const float defaultOverlayWidth = std::min(420.0f, maxOverlayWidth);
+  const float defaultOverlayHeight = std::min(680.0f, maxOverlayHeight);
+
+  ImGui::SetNextWindowPos(ImVec2(overlayMargin, overlayMargin), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(
+      ImVec2(defaultOverlayWidth, defaultOverlayHeight), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSizeConstraints(
+      ImVec2(minOverlayWidth, minOverlayHeight),
+      ImVec2(maxOverlayWidth, maxOverlayHeight));
+
+  ImGuiWindowFlags overlayFlags = ImGuiWindowFlags_NoCollapse;
+  ImGui::Begin("Interactive BRL-CAD Raytracer", nullptr, overlayFlags);
+  ImGui::BeginChild("overlay_content", ImVec2(0.0f, 0.0f), false,
+      ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
   if (sceneLoadInProgress_.load()) {
     ImGui::Separator();
     ImGui::Text("Status");
     ImGui::TextWrapped("%s", loadStatusText_.toStdString().c_str());
     ImGui::Text("Renderer work is paused until the scene load completes.");
+    ImGui::EndChild();
     ImGui::End();
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -641,6 +663,7 @@ void RenderWidget::paintGL()
 
   ImGui::Separator();
   ImGui::Text("Render Settings");
+  ImGui::PushItemWidth(-1.0f);
   bool settingsChanged = false;
   int settingsMode = usingWorkerRenderPath()
       ? workerSettings_.settingsMode
@@ -652,7 +675,6 @@ void RenderWidget::paintGL()
       backend_.setSettingsMode(OsprayBackend::SettingsMode::Automatic);
     settingsChanged = true;
   }
-  ImGui::SameLine();
   if (ImGui::RadioButton("Custom", settingsMode == 1)) {
     if (usingWorkerRenderPath())
       workerSettings_.settingsMode = 1;
@@ -831,6 +853,7 @@ void RenderWidget::paintGL()
     renderOnce();
     update();
   }
+  ImGui::PopItemWidth();
 
   if (ImGui::Button("Reset View")) {
     resetView();
@@ -848,21 +871,24 @@ void RenderWidget::paintGL()
 
   ImGui::Separator();
   ImGui::Text("Controls");
+  ImGui::PushTextWrapPos(0.0f);
   if (mode == 0) {
-    ImGui::Text("Orbit: LMB rotate | RMB pan | wheel zoom");
-    ImGui::Text("Shift + drag: Translate");
-    ImGui::Text("Ctrl + drag: Rotate");
-    ImGui::Text("Shift + Ctrl + drag: Scale");
-    ImGui::Text("Alt + Left: X axis");
-    ImGui::Text("Alt + Shift + Left: Y axis");
-    ImGui::Text("Alt + Right: Z axis");
-    ImGui::Text("G: Toggle overlay");
+    ImGui::BulletText("Orbit: LMB rotate, RMB pan, wheel zoom");
+    ImGui::BulletText("Shift + drag: Translate");
+    ImGui::BulletText("Ctrl + drag: Rotate");
+    ImGui::BulletText("Shift + Ctrl + drag: Scale");
+    ImGui::BulletText("Alt + Left: X axis");
+    ImGui::BulletText("Alt + Shift + Left: Y axis");
+    ImGui::BulletText("Alt + Right: Z translate");
+    ImGui::BulletText("G: Toggle overlay");
   }
   else {
-    ImGui::Text("Fly: WASD move | LMB look | Tab toggle");
-    ImGui::Text("G: Toggle overlay");
+    ImGui::BulletText("Fly: WASD move, LMB look, Tab toggle");
+    ImGui::BulletText("G: Toggle overlay");
   }
+  ImGui::PopTextWrapPos();
 
+  ImGui::EndChild();
   ImGui::End();
 
   ImGui::Render();

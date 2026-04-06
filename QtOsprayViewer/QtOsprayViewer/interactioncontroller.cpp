@@ -8,39 +8,34 @@ InteractionController::Result InteractionController::classify(
   const bool shift = mods & Qt::ShiftModifier;
   const bool ctrl = mods & Qt::ControlModifier;
   const bool alt = mods & Qt::AltModifier;
+  const bool left = buttons & Qt::LeftButton;
+  const bool right = buttons & Qt::RightButton;
 
-  // Default actions
+  if (alt) {
+    // Strict matching for documented axis-constrained gestures only.
+    if (left && !right && !ctrl) {
+      if (shift) {
+        r.action = Action::Translate;
+        r.axis = AxisConstraint::Y;
+      } else {
+        r.action = Action::Translate;
+        r.axis = AxisConstraint::X;
+      }
+    } else if (right && !left && !shift && !ctrl) {
+      r.axis = AxisConstraint::Z;
+      r.action = Action::Translate;
+    }
+
+    return r;
+  }
+
+  // Default non-alt actions.
   if (shift && ctrl)
     r.action = Action::Scale;
   else if (ctrl)
     r.action = Action::Rotate;
   else if (shift)
     r.action = Action::Translate;
-  else
-    r.action = Action::None;
-
-  // Alt-based axis constraints + fallback actions
-  if (alt) {
-    if (buttons & Qt::LeftButton) {
-      // Alt+Left = X
-      // Alt+Shift+Left = Y
-      if (shift && !ctrl)
-        r.axis = AxisConstraint::Y;
-      else
-        r.axis = AxisConstraint::X;
-
-      // If no action chosen yet, default to translate
-      if (r.action == Action::None)
-        r.action = Action::Translate;
-    } else if (buttons & Qt::RightButton) {
-      // Alt+Right = Z
-      r.axis = AxisConstraint::Z;
-
-      // If no action chosen yet, default to rotate
-      if (r.action == Action::None)
-        r.action = Action::Rotate;
-    }
-  }
 
   return r;
 }
