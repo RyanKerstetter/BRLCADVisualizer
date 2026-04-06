@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <stdexcept>
@@ -89,6 +90,7 @@ void OsprayBackend::resize(int w, int h)
     pendingResizeW_ = std::max(1, w);
     pendingResizeH_ = std::max(1, h);
     pendingResize_ = true;
+    enqueueLatestRenderRequest("resize");
     return;
   }
 
@@ -103,12 +105,22 @@ void OsprayBackend::resize(int w, int h)
       fbW_, fbH_, OSP_FB_SRGBA, OSP_FB_COLOR | OSP_FB_ACCUM);
   displayPixels_.assign(size_t(fbW_) * size_t(fbH_), 0u);
   resetProgressiveState(true);
+  enqueueLatestRenderRequest("resize");
 }
 
 void OsprayBackend::setCamera(const vec3f &eye, const vec3f &center, const vec3f &up, float fovyDeg)
 {
+  ++cameraVersion_;
+  if (frameInFlight_) {
+    if (isInteracting_ && activeRenderRequest_
+        && activeRenderRequest_->type != RenderRequestType::Preview) {
+      cancelInFlightFrame("camera_move_preempt");
+    }
+  }
+
   if (frameInFlight_) {
     pendingCameraState_ = PendingCameraState{eye, center, up, fovyDeg};
+    enqueueLatestRenderRequest("camera");
     return;
   }
 
@@ -117,16 +129,19 @@ void OsprayBackend::setCamera(const vec3f &eye, const vec3f &center, const vec3f
   camera_.setParam("up", up);
   camera_.setParam("fovy", fovyDeg);
   cameraDirty_ = true;
+  enqueueLatestRenderRequest("camera");
 }
 
 void OsprayBackend::resetAccumulation()
 {
   if (frameInFlight_) {
     pendingResetAccumulation_ = true;
+    enqueueLatestRenderRequest("resetAccumulation");
     return;
   }
 
   resetProgressiveState(false);
+  enqueueLatestRenderRequest("resetAccumulation");
 }
 
 const uint32_t *OsprayBackend::pixels() const
@@ -571,6 +586,7 @@ void OsprayBackend::setRenderer(const std::string &type)
   if (frameInFlight_) {
     pendingRendererType_ = type;
     pendingResetAccumulation_ = true;
+    enqueueLatestRenderRequest("renderer");
     return;
   }
 
@@ -586,6 +602,7 @@ void OsprayBackend::setRenderer(const std::string &type)
     appliedPixelSamples_ = configuredPixelSamplesForCurrentMode();
 
     resetAccumulation();
+    enqueueLatestRenderRequest("renderer");
   } catch (const std::exception &e) {
     setError(e.what());
   } catch (...) {
@@ -791,6 +808,7 @@ void OsprayBackend::setInteracting(bool interacting)
   if (isInteracting_ == interacting)
     return;
   isInteracting_ = interacting;
+  enqueueLatestRenderRequest(interacting ? "interaction.begin" : "interaction.end");
   resetAccumulation();
 }
 
@@ -931,9 +949,11 @@ bool OsprayBackend::lowQualityWhileInteractingForCurrentMode() const
       : true;
 }
 
-void OsprayBackend::cancelInFlightFrame()
+void OsprayBackend::cancelInFlightFrame(const char *reason)
 {
   if (frameInFlight_) {
+    if (activeRenderRequest_)
+      logRenderRequest("cancel", *activeRenderRequest_, reason);
     if (currentFrame_.handle())
       currentFrame_.cancel();
   }
@@ -941,6 +961,55 @@ void OsprayBackend::cancelInFlightFrame()
   frameInFlight_ = false;
   currentFrame_ = ospray::cpp::Future();
   inFlightStartValid_ = false;
+  activeRenderRequest_.reset();
+}
+
+OsprayBackend::RenderRequestType OsprayBackend::currentRenderRequestType() const
+{
+  if (isInteracting_)
+    return RenderRequestType::Preview;
+  return renderPhase_ == RenderPhase::Accumulate ? RenderRequestType::Full
+                                                 : RenderRequestType::Progressive;
+}
+
+const char *OsprayBackend::renderRequestTypeName(RenderRequestType type) const
+{
+  switch (type) {
+  case RenderRequestType::Preview:
+    return "preview";
+  case RenderRequestType::Progressive:
+    return "progressive";
+  case RenderRequestType::Full:
+    return "full";
+  }
+  return "unknown";
+}
+
+void OsprayBackend::logRenderRequest(const char *event,
+    const RenderRequest &request,
+    const char *reason) const
+{
+  std::fprintf(stderr,
+      "IBRT render %s: id=%llu type=%s camera=%llu phase=%s scale=%d%s%s\n",
+      event,
+      static_cast<unsigned long long>(request.id),
+      renderRequestTypeName(request.type),
+      static_cast<unsigned long long>(request.cameraVersion),
+      renderPhase_ == RenderPhase::Accumulate ? "accumulate" : "progressive",
+      passScale_,
+      reason ? " reason=" : "",
+      reason ? reason : "");
+}
+
+void OsprayBackend::enqueueLatestRenderRequest(const char *reason)
+{
+  RenderRequest request;
+  request.id = nextRenderRequestId_++;
+  request.cameraVersion = cameraVersion_;
+  request.type = isInteracting_ ? RenderRequestType::Preview
+                                : RenderRequestType::Progressive;
+  pendingRenderRequest_ = request;
+  logRenderRequest("request", request, reason);
 }
 
 void OsprayBackend::resetProgressiveState(bool clearDisplay)
@@ -1010,9 +1079,17 @@ void OsprayBackend::prepareTileFrameBuffer(int tileW, int tileH)
 
 bool OsprayBackend::startNextRenderWork()
 {
+  RenderRequest request = pendingRenderRequest_.value_or(RenderRequest{
+      nextRenderRequestId_++, cameraVersion_, currentRenderRequestType()});
+  request.type = currentRenderRequestType();
+  request.cameraVersion = cameraVersion_;
+
   if (renderPhase_ == RenderPhase::Accumulate) {
     if (!accumFb_.handle())
       return false;
+    activeRenderRequest_ = request;
+    pendingRenderRequest_.reset();
+    logRenderRequest("start", request);
     updateCameraCrop(vec2f(0.f, 0.f), vec2f(1.f, 1.f));
     camera_.commit();
     currentFrame_ = accumFb_.renderFrame(renderer_, camera_, world_);
@@ -1023,6 +1100,9 @@ bool OsprayBackend::startNextRenderWork()
   }
 
   prepareTileFrameBuffer(passW_, passH_);
+  activeRenderRequest_ = request;
+  pendingRenderRequest_.reset();
+  logRenderRequest("start", request);
   updateCameraCrop(vec2f(0.f, 0.f), vec2f(1.f, 1.f));
   camera_.commit();
   currentFrame_ = passFb_.renderFrame(renderer_, camera_, world_);
@@ -1072,6 +1152,12 @@ bool OsprayBackend::finishCompletedRender()
   inFlightStartValid_ = false;
   currentFrame_ = ospray::cpp::Future();
   applyAoBackoff(watchdogTriggered_);
+  if (activeRenderRequest_) {
+    char reason[64];
+    std::snprintf(reason, sizeof(reason), "frameMs=%.2f", lastFrameTimeMs_);
+    logRenderRequest("finish", *activeRenderRequest_, reason);
+  }
+  activeRenderRequest_.reset();
   return updatedImage;
 }
 

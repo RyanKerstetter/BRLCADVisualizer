@@ -123,8 +123,28 @@ class OsprayBackend
     Accumulate
   };
 
+  enum class RenderRequestType
+  {
+    Preview,
+    Progressive,
+    Full
+  };
+
+  struct RenderRequest
+  {
+    uint64_t id = 0;
+    uint64_t cameraVersion = 0;
+    RenderRequestType type = RenderRequestType::Progressive;
+  };
+
   void setError(std::string message);
-  void cancelInFlightFrame();
+  void cancelInFlightFrame(const char *reason = "preempted");
+  RenderRequestType currentRenderRequestType() const;
+  const char *renderRequestTypeName(RenderRequestType type) const;
+  void logRenderRequest(const char *event,
+      const RenderRequest &request,
+      const char *reason = nullptr) const;
+  void enqueueLatestRenderRequest(const char *reason);
   void resetProgressiveState(bool clearDisplay = false);
   void updateCameraCrop(const rkcommon::math::vec2f &imageStart,
       const rkcommon::math::vec2f &imageEnd);
@@ -183,6 +203,10 @@ class OsprayBackend
   bool isInteracting_ = false;
   int aoBackoffSteps_ = 0;
   int progressiveFramesAtCurrentScale_ = 0;
+  uint64_t cameraVersion_ = 0;
+  uint64_t nextRenderRequestId_ = 1;
+  std::optional<RenderRequest> pendingRenderRequest_;
+  std::optional<RenderRequest> activeRenderRequest_;
   std::optional<PendingCameraState> pendingCameraState_;
   std::optional<std::string> pendingRendererType_;
   bool pendingResetAccumulation_ = false;
