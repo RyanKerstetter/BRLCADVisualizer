@@ -680,7 +680,13 @@ void RenderWidget::paintGL()
 
   ImGui::Separator();
   ImGui::Text("Render Settings");
-  ImGui::PushItemWidth(-1.0f);
+  auto pushWidthForInlineLabel = [](const char *label) {
+    const ImGuiStyle &style = ImGui::GetStyle();
+    const float labelWidth = ImGui::CalcTextSize(label).x;
+    const float itemWidth =
+        std::max(1.0f, ImGui::GetContentRegionAvail().x - labelWidth - style.ItemInnerSpacing.x);
+    ImGui::PushItemWidth(itemWidth);
+  };
   bool settingsChanged = false;
   int settingsMode = usingWorkerRenderPath()
       ? workerSettings_.settingsMode
@@ -713,6 +719,7 @@ void RenderWidget::paintGL()
         preset = 2;
     }
     const char *presetLabels[] = {"Fast", "Balanced", "Quality"};
+    pushWidthForInlineLabel("Preset");
     if (ImGui::Combo("Preset", &preset, presetLabels, IM_ARRAYSIZE(presetLabels))) {
       if (usingWorkerRenderPath())
         workerSettings_.automaticPreset = preset;
@@ -725,9 +732,11 @@ void RenderWidget::paintGL()
           backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Quality);
       settingsChanged = true;
     }
+    ImGui::PopItemWidth();
 
     float targetMs = usingWorkerRenderPath() ? workerSettings_.automaticTargetFrameTimeMs
                                              : backend_.automaticTargetFrameTimeMs();
+    pushWidthForInlineLabel("Target Frame Time (ms)");
     if (ImGui::DragFloat("Target Frame Time (ms)", &targetMs, 0.1f, 2.0f, 1000.0f, "%.1f")) {
       if (usingWorkerRenderPath())
         workerSettings_.automaticTargetFrameTimeMs = targetMs;
@@ -735,6 +744,7 @@ void RenderWidget::paintGL()
         backend_.setAutomaticTargetFrameTimeMs(targetMs);
       settingsChanged = true;
     }
+    ImGui::PopItemWidth();
 
     bool accumEnabled = usingWorkerRenderPath() ? workerSettings_.automaticAccumulationEnabled
                                                 : backend_.automaticAccumulationEnabled();
@@ -755,6 +765,7 @@ void RenderWidget::paintGL()
 
     int startScale = usingWorkerRenderPath() ? workerSettings_.customStartScale
                                              : backend_.customStartScale();
+    pushWidthForInlineLabel("Start Scale");
     if (ImGui::SliderInt("Start Scale", &startScale, 1, 16)) {
       if (usingWorkerRenderPath())
         workerSettings_.customStartScale = startScale;
@@ -762,9 +773,11 @@ void RenderWidget::paintGL()
         backend_.setCustomStartScale(startScale);
       settingsChanged = true;
     }
+    ImGui::PopItemWidth();
 
     float targetMs = usingWorkerRenderPath() ? workerSettings_.customTargetFrameTimeMs
                                              : backend_.customTargetFrameTimeMs();
+    pushWidthForInlineLabel("Target Frame Time (ms)");
     if (ImGui::DragFloat("Target Frame Time (ms)", &targetMs, 0.1f, 2.0f, 1000.0f, "%.1f")) {
       if (usingWorkerRenderPath())
         workerSettings_.customTargetFrameTimeMs = targetMs;
@@ -772,9 +785,11 @@ void RenderWidget::paintGL()
         backend_.setCustomTargetFrameTimeMs(targetMs);
       settingsChanged = true;
     }
+    ImGui::PopItemWidth();
 
     int aoSamples = usingWorkerRenderPath() ? workerSettings_.customAoSamples
                                             : backend_.customAoSamples();
+    pushWidthForInlineLabel("AO Samples");
     if (ImGui::SliderInt("AO Samples", &aoSamples, 0, 32)) {
       if (usingWorkerRenderPath())
         workerSettings_.customAoSamples = aoSamples;
@@ -782,9 +797,11 @@ void RenderWidget::paintGL()
         backend_.setAoSamples(aoSamples);
       settingsChanged = true;
     }
+    ImGui::PopItemWidth();
 
     int pixelSamples = usingWorkerRenderPath() ? workerSettings_.customPixelSamples
                                                : backend_.customPixelSamples();
+    pushWidthForInlineLabel("Pixel Samples");
     if (ImGui::SliderInt("Pixel Samples", &pixelSamples, 1, 64)) {
       if (usingWorkerRenderPath())
         workerSettings_.customPixelSamples = pixelSamples;
@@ -792,6 +809,7 @@ void RenderWidget::paintGL()
         backend_.setPixelSamples(pixelSamples);
       settingsChanged = true;
     }
+    ImGui::PopItemWidth();
 
     bool accumEnabled = usingWorkerRenderPath() ? workerSettings_.customAccumulationEnabled
                                                 : backend_.customAccumulationEnabled();
@@ -805,6 +823,7 @@ void RenderWidget::paintGL()
 
     int maxAccumFrames = usingWorkerRenderPath() ? workerSettings_.customMaxAccumulationFrames
                                                  : backend_.customMaxAccumulationFrames();
+    pushWidthForInlineLabel("Max Accumulation Frames");
     if (ImGui::InputInt("Max Accumulation Frames", &maxAccumFrames)) {
       if (usingWorkerRenderPath())
         workerSettings_.customMaxAccumulationFrames = maxAccumFrames;
@@ -812,6 +831,7 @@ void RenderWidget::paintGL()
         backend_.setCustomMaxAccumulationFrames(maxAccumFrames);
       settingsChanged = true;
     }
+    ImGui::PopItemWidth();
 
     bool lowQualityInteract = usingWorkerRenderPath()
         ? workerSettings_.customLowQualityWhileInteracting
@@ -837,6 +857,7 @@ void RenderWidget::paintGL()
 
     int watchdogMs = usingWorkerRenderPath() ? workerSettings_.customWatchdogTimeoutMs
                                              : backend_.customWatchdogTimeoutMs();
+    pushWidthForInlineLabel("Watchdog Timeout (ms)");
     if (ImGui::InputInt("Watchdog Timeout (ms)", &watchdogMs)) {
       if (usingWorkerRenderPath())
         workerSettings_.customWatchdogTimeoutMs = watchdogMs;
@@ -844,6 +865,7 @@ void RenderWidget::paintGL()
         backend_.setCustomWatchdogTimeoutMs(watchdogMs);
       settingsChanged = true;
     }
+    ImGui::PopItemWidth();
 
     if (ImGui::Button("Reset Render")) {
       resetAccumulationTargets();
@@ -870,7 +892,6 @@ void RenderWidget::paintGL()
     renderOnce();
     update();
   }
-  ImGui::PopItemWidth();
 
   if (ImGui::Button("Reset View")) {
     resetView();
