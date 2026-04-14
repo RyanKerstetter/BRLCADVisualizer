@@ -157,6 +157,7 @@ class OsprayBackend
   void applyAoBackoff(bool forcedByWatchdog);
   void applyPendingState();
   void applyDefaultLights();
+  void applyRendererDefaults();
   void applyDefaultMaterial(ospray::cpp::GeometricModel &model);
   void applyWorldInstances();
 

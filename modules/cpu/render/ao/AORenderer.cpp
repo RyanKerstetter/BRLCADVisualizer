@@ -32,6 +32,10 @@ void AORenderer::commit()
       getParam<float>("aoDistance", getParam<float>("aoRadius", 1e20f));
   getSh()->aoIntensity = getParam<float>("aoIntensity", 1.f);
   getSh()->volumeSamplingRate = getParam<float>("volumeSamplingRate", 1.f);
+  getSh()->lightDirection =
+      getParam<vec3f>("lightDirection", vec3f(0.3f, 1.0f, 0.2f));
+  getSh()->ambientIntensity = getParam<float>("ambientIntensity", 0.18f);
+  getSh()->directionalIntensity = getParam<float>("directionalIntensity", 0.82f);
 }
 
 devicert::AsyncEvent AORenderer::renderTasks(FrameBuffer *fb,

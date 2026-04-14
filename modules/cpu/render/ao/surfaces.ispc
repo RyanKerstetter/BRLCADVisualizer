@@ -53,9 +53,12 @@ SYCL_EXTERNAL SSI AORenderer_computeShading(const AORenderer *uniform self,
 
   const vec3f color = make_vec3f(surfaceColor);
   const float opacity = surfaceColor.w;
-  const float eyeLightIntensity = absf(dot(dg.Ns, sample.ray.dir)) * opacity;
+  const vec3f lightDir = normalize(self->lightDirection);
+  const float diffuse = max(0.f, dot(dg.Ns, lightDir));
+  const float baseLight =
+      min(1.f, self->ambientIntensity + self->directionalIntensity * diffuse);
 
-  float intensity = eyeLightIntensity;
+  float intensity = baseLight * opacity;
   if (self->aoSamples > 0 && self->aoIntensity > 0.01f) {
     const float ao = computeAO(&self->super,
         world,
