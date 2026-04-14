@@ -25,6 +25,8 @@ using rkcommon::math::vec4f;
 
 namespace {
 const vec3f kSunLightDirection(-0.3f, -1.0f, -0.2f);
+const vec3f kFillLightDirection(0.65f, -0.45f, 0.55f);
+const vec3f kRimLightDirection(-0.55f, -0.2f, 0.75f);
 
 vec3f normalizeDirection(const vec3f &v)
 {
@@ -67,39 +69,59 @@ bool ensureBrlcadModuleLoaded(std::string &errorOut)
   return loaded;
 }
 
-std::vector<ospray::cpp::Light> makeDefaultLights(bool forPathTracer)
+std::vector<ospray::cpp::Light> makeDefaultLights(const std::string &rendererType)
 {
   std::vector<ospray::cpp::Light> lights;
 
-  if (forPathTracer) {
+  if (rendererType == "pathtracer") {
     // Path tracing needs actual illumination from a light or environment.
     ospray::cpp::Light sunSky("sunSky");
     sunSky.setParam("direction", kSunLightDirection);
-    sunSky.setParam("intensity", 0.35f);
-    sunSky.setParam("turbidity", 3.0f);
-    sunSky.setParam("albedo", 0.3f);
+    sunSky.setParam("intensity", 0.08f);
+    sunSky.setParam("albedo", 0.2f);
+    sunSky.setParam("turbidity", 5.0f);
     sunSky.setParam("visible", true);
     sunSky.commit();
     lights.push_back(sunSky);
 
     ospray::cpp::Light distant("distant");
     distant.setParam("direction", kSunLightDirection);
-    distant.setParam("intensity", 3.0f);
+    distant.setParam("intensity", 1.8f);
     distant.setParam("visible", true);
-    distant.setParam("angularDiameter", 0.53f);
+    distant.setParam("angularDiameter", 1.8f);
     distant.commit();
     lights.push_back(distant);
-  } else {
+  } else if (rendererType == "scivis") {
     ospray::cpp::Light ambient("ambient");
-    ambient.setParam("intensity", 0.25f);
+    ambient.setParam("intensity", 0.18f);
     ambient.commit();
     lights.push_back(ambient);
 
-    ospray::cpp::Light distant("distant");
-    distant.setParam("direction", kSunLightDirection);
-    distant.setParam("intensity", 3.0f);
-    distant.commit();
-    lights.push_back(distant);
+    ospray::cpp::Light key("distant");
+    key.setParam("direction", kSunLightDirection);
+    key.setParam("intensity", 2.2f);
+    key.setParam("angularDiameter", 2.4f);
+    key.commit();
+    lights.push_back(key);
+
+    ospray::cpp::Light fill("distant");
+    fill.setParam("direction", kFillLightDirection);
+    fill.setParam("intensity", 0.65f);
+    fill.setParam("angularDiameter", 12.0f);
+    fill.commit();
+    lights.push_back(fill);
+
+    ospray::cpp::Light rim("distant");
+    rim.setParam("direction", kRimLightDirection);
+    rim.setParam("intensity", 0.18f);
+    rim.setParam("angularDiameter", 6.0f);
+    rim.commit();
+    lights.push_back(rim);
+  } else {
+    ospray::cpp::Light ambient("ambient");
+    ambient.setParam("intensity", 0.05f);
+    ambient.commit();
+    lights.push_back(ambient);
   }
 
   return lights;
@@ -111,10 +133,7 @@ void OsprayBackend::init()
   try {
     renderer_ = ospray::cpp::Renderer("scivis");
     currentRenderer_ = "scivis";
-    renderer_.setParam("aoSamples", configuredAoSamplesForCurrentMode());
-    renderer_.setParam("pixelSamples", configuredPixelSamplesForCurrentMode());
-    renderer_.setParam("backgroundColor", 1.0f);
-    renderer_.commit();
+    applyRendererDefaults();
     appliedAoSamples_ = configuredAoSamplesForCurrentMode();
     appliedPixelSamples_ = configuredPixelSamplesForCurrentMode();
 
@@ -609,11 +628,7 @@ void OsprayBackend::setRenderer(const std::string &type)
   try {
     renderer_ = ospray::cpp::Renderer(type);
     currentRenderer_ = type;
-
-    renderer_.setParam("backgroundColor", 1.0f);
-    renderer_.setParam("pixelSamples", configuredPixelSamplesForCurrentMode());
-    renderer_.setParam("aoSamples", configuredAoSamplesForCurrentMode());
-    renderer_.commit();
+    applyRendererDefaults();
     appliedAoSamples_ = configuredAoSamplesForCurrentMode();
     appliedPixelSamples_ = configuredPixelSamplesForCurrentMode();
 
@@ -1056,7 +1071,26 @@ void OsprayBackend::setProgressiveScale(int scale)
 void OsprayBackend::applyDefaultLights()
 {
   world_.setParam("light",
-      ospray::cpp::CopiedData(makeDefaultLights(currentRenderer_ == "pathtracer")));
+      ospray::cpp::CopiedData(makeDefaultLights(currentRenderer_)));
+}
+
+void OsprayBackend::applyRendererDefaults()
+{
+  renderer_.setParam("backgroundColor", 1.0f);
+  renderer_.setParam("pixelSamples", configuredPixelSamplesForCurrentMode());
+  renderer_.setParam("aoSamples", configuredAoSamplesForCurrentMode());
+
+  if (currentRenderer_ == "scivis") {
+    renderer_.setParam("shadows", true);
+    renderer_.setParam("visibleLights", false);
+  } else if (currentRenderer_ == "ao") {
+    renderer_.setParam("aoIntensity", 1.0f);
+    renderer_.setParam("lightDirection", normalizeDirection(-kSunLightDirection));
+    renderer_.setParam("ambientIntensity", 0.18f);
+    renderer_.setParam("directionalIntensity", 0.82f);
+  }
+
+  renderer_.commit();
 }
 
 void OsprayBackend::applyDefaultMaterial(ospray::cpp::GeometricModel &model)
@@ -1228,12 +1262,14 @@ void OsprayBackend::applyPendingState()
   if (pendingRendererType_) {
     renderer_ = ospray::cpp::Renderer(*pendingRendererType_);
     currentRenderer_ = *pendingRendererType_;
-    renderer_.setParam("backgroundColor", 1.0f);
-    renderer_.setParam("pixelSamples", configuredPixelSamplesForCurrentMode());
-    renderer_.setParam("aoSamples", configuredAoSamplesForCurrentMode());
-    renderer_.commit();
+    applyRendererDefaults();
     appliedAoSamples_ = configuredAoSamplesForCurrentMode();
     appliedPixelSamples_ = configuredPixelSamplesForCurrentMode();
+    if (world_.handle()) {
+      applyWorldInstances();
+      applyDefaultLights();
+      world_.commit();
+    }
     pendingRendererType_.reset();
     pendingResetAccumulation_ = true;
   }
