@@ -83,15 +83,19 @@ class RenderWorkerClient : public QObject
   void workerConnectionChanged(bool connected);
 
  private:
-#ifdef _WIN32
-  bool connectPipe();
   bool sendPing();
   bool sendRequest(uint32_t type, const QString &payload, QString *responsePayload);
   bool sendRequestBytes(uint32_t type,
       const std::string &payload,
       std::string *responsePayload);
+#ifdef _WIN32
+  bool connectPipe();
   void closePipe();
   HANDLE pipe_ = INVALID_HANDLE_VALUE;
+#else
+  bool connectSocket();
+  void closeSocket();
+  int socket_ = -1;
 #endif
   QProcess *process_ = nullptr;
   QString workerPath_;

@@ -174,6 +174,21 @@ target_link_libraries(IBRTRenderWorker PRIVATE
     $<$<BOOL:${WIN32}>:TBB::tbb>
 )
 
+# On Linux set RPATH so that OSPRay/rkcommon .so files are found at runtime
+# without needing to set LD_LIBRARY_PATH manually.
+if(NOT WIN32)
+    set_target_properties(QtOsprayViewer PROPERTIES
+        INSTALL_RPATH "${OSPRAY_PREFIX}/lib;${RKCOMMON_PREFIX}/lib;${BRLCAD_PREFIX}/lib"
+        BUILD_RPATH   "${OSPRAY_PREFIX}/lib;${RKCOMMON_PREFIX}/lib;${BRLCAD_PREFIX}/lib"
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+    )
+    set_target_properties(IBRTRenderWorker PROPERTIES
+        INSTALL_RPATH "${OSPRAY_PREFIX}/lib;${RKCOMMON_PREFIX}/lib;${BRLCAD_PREFIX}/lib"
+        BUILD_RPATH   "${OSPRAY_PREFIX}/lib;${RKCOMMON_PREFIX}/lib;${BRLCAD_PREFIX}/lib"
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+    )
+endif()
+
 if(WIN32)
     set(TBB_REDIST_DIR "${TBB_ROOT}/redist/intel64/vc14")
 
@@ -332,5 +347,13 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:IBRTRenderWorker>"
             "$<TARGET_FILE_DIR:QtOsprayViewer>/IBRTRenderWorker.exe"
+        COMMENT "Deploying render worker executable...")
+else()
+    # Linux: deploy worker next to the main executable.
+    add_dependencies(QtOsprayViewer IBRTRenderWorker)
+    add_custom_command(TARGET QtOsprayViewer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:IBRTRenderWorker>"
+            "$<TARGET_FILE_DIR:QtOsprayViewer>/IBRTRenderWorker"
         COMMENT "Deploying render worker executable...")
 endif()

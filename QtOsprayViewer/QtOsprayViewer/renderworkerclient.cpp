@@ -9,6 +9,14 @@
 #include <cstring>
 #include <string>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
+
 RenderWorkerClient::RenderWorkerClient(QObject *parent) : QObject(parent)
 {
   process_ = new QProcess(this);
@@ -21,23 +29,23 @@ RenderWorkerClient::~RenderWorkerClient()
 
 bool RenderWorkerClient::start(const QString &workerPath)
 {
-#ifndef _WIN32
-  Q_UNUSED(workerPath);
-  lastError_ = QStringLiteral("Render worker is currently implemented for Windows only.");
-  return false;
-#else
   workerPath_ = workerPath;
   stop();
 
   pipeName_ =
       QString::fromStdString(ibrt::ipc::makePipeName(QCoreApplication::applicationPid()));
+  process_->setProcessChannelMode(QProcess::ForwardedChannels);
   process_->start(workerPath, {QStringLiteral("--pipe"), pipeName_});
   if (!process_->waitForStarted(5000)) {
     lastError_ = QStringLiteral("Failed to start render worker process.");
     return false;
   }
 
+#ifdef _WIN32
   if (!connectPipe()) {
+#else
+  if (!connectSocket()) {
+#endif
     process_->kill();
     process_->waitForFinished(2000);
     return false;
@@ -50,7 +58,6 @@ bool RenderWorkerClient::start(const QString &workerPath)
 
   emit workerConnectionChanged(true);
   return true;
-#endif
 }
 
 bool RenderWorkerClient::restart()
@@ -70,6 +77,12 @@ void RenderWorkerClient::stop()
         pipe_, {ibrt::ipc::MessageType::Shutdown, 0, std::string()});
   }
   closePipe();
+#else
+  if (socket_ != -1) {
+    ibrt::ipc::writeMessage(
+        socket_, {ibrt::ipc::MessageType::Shutdown, 0, std::string()});
+  }
+  closeSocket();
 #endif
 
   if (process_->state() != QProcess::NotRunning) {
@@ -86,7 +99,7 @@ bool RenderWorkerClient::isConnected() const
 #ifdef _WIN32
   return pipe_ != INVALID_HANDLE_VALUE;
 #else
-  return false;
+  return socket_ != -1;
 #endif
 }
 
@@ -97,10 +110,6 @@ QString RenderWorkerClient::lastError() const
 
 QStringList RenderWorkerClient::listBrlcadObjects(const QString &path)
 {
-#ifndef _WIN32
-  Q_UNUSED(path);
-  return {};
-#else
   QString payload;
   if (!sendRequest(static_cast<uint32_t>(ibrt::ipc::MessageType::ListBrlcadObjects),
           path,
@@ -112,18 +121,11 @@ QStringList RenderWorkerClient::listBrlcadObjects(const QString &path)
     return {};
 
   return payload.split('\n', Qt::SkipEmptyParts);
-#endif
 }
 
 RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadObj(const QString &path)
 {
   SceneLoadResult result;
-#ifndef _WIN32
-  Q_UNUSED(path);
-  result.errorMessage = QStringLiteral("Render worker is currently implemented for Windows only.");
-  lastError_ = result.errorMessage;
-  return result;
-#else
   std::string payload;
   if (!sendRequestBytes(
           static_cast<uint32_t>(ibrt::ipc::MessageType::LoadObj), path.toStdString(), &payload)) {
@@ -158,20 +160,12 @@ RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadObj(const QString &p
   }
   lastError_ = result.errorMessage;
   return result;
-#endif
 }
 
 RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadBrlcad(
     const QString &path, const QString &objectName)
 {
   SceneLoadResult result;
-#ifndef _WIN32
-  Q_UNUSED(path);
-  Q_UNUSED(objectName);
-  result.errorMessage = QStringLiteral("Render worker is currently implemented for Windows only.");
-  lastError_ = result.errorMessage;
-  return result;
-#else
   const std::string requestPayload =
       path.toStdString() + '\n' + objectName.toStdString();
   std::string payload;
@@ -208,16 +202,10 @@ RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadBrlcad(
   }
   lastError_ = result.errorMessage;
   return result;
-#endif
 }
 
 bool RenderWorkerClient::resize(int width, int height)
 {
-#ifndef _WIN32
-  Q_UNUSED(width);
-  Q_UNUSED(height);
-  return false;
-#else
   std::string payload(sizeof(int32_t) * 2, '\0');
   auto *values = reinterpret_cast<int32_t *>(payload.data());
   values[0] = width;
@@ -225,7 +213,6 @@ bool RenderWorkerClient::resize(int width, int height)
   std::string response;
   return sendRequestBytes(
       static_cast<uint32_t>(ibrt::ipc::MessageType::Resize), payload, &response);
-#endif
 }
 
 bool RenderWorkerClient::setCamera(const rkcommon::math::vec3f &eye,
@@ -233,13 +220,6 @@ bool RenderWorkerClient::setCamera(const rkcommon::math::vec3f &eye,
     const rkcommon::math::vec3f &up,
     float fovyDeg)
 {
-#ifndef _WIN32
-  Q_UNUSED(eye);
-  Q_UNUSED(center);
-  Q_UNUSED(up);
-  Q_UNUSED(fovyDeg);
-  return false;
-#else
   struct CameraPayload
   {
     float eye[3];
@@ -256,41 +236,27 @@ bool RenderWorkerClient::setCamera(const rkcommon::math::vec3f &eye,
   std::string response;
   return sendRequestBytes(
       static_cast<uint32_t>(ibrt::ipc::MessageType::SetCamera), payload, &response);
-#endif
 }
 
 bool RenderWorkerClient::resetAccumulation()
 {
-#ifndef _WIN32
-  return false;
-#else
   std::string response;
   return sendRequestBytes(static_cast<uint32_t>(ibrt::ipc::MessageType::ResetAccumulation),
       std::string(),
       &response);
-#endif
 }
 
 bool RenderWorkerClient::setRenderer(const QString &rendererType)
 {
-#ifndef _WIN32
-  Q_UNUSED(rendererType);
-  return false;
-#else
   std::string response;
   return sendRequestBytes(
       static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderer),
       rendererType.toStdString(),
       &response);
-#endif
 }
 
 bool RenderWorkerClient::setRenderSettings(const RenderSettingsState &settings)
 {
-#ifndef _WIN32
-  Q_UNUSED(settings);
-  return false;
-#else
   struct SettingsPayload
   {
     int32_t settingsMode;
@@ -323,15 +289,11 @@ bool RenderWorkerClient::setRenderSettings(const RenderSettingsState &settings)
   return sendRequestBytes(static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderSettings),
       std::string(reinterpret_cast<const char *>(&payload), sizeof(payload)),
       &response);
-#endif
 }
 
 RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
 {
   FrameResult result;
-#ifndef _WIN32
-  return result;
-#else
   std::string payload;
   if (!sendRequestBytes(static_cast<uint32_t>(ibrt::ipc::MessageType::RequestFrame),
           std::string(),
@@ -380,35 +342,17 @@ RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
         payload.substr(rendererOffset, size_t(header.rendererNameSize)));
   }
   return result;
-#endif
-}
-
-#ifdef _WIN32
-bool RenderWorkerClient::connectPipe()
-{
-  for (int attempt = 0; attempt < 50; ++attempt) {
-    pipe_ = CreateFileA(pipeName_.toStdString().c_str(),
-        GENERIC_READ | GENERIC_WRITE,
-        0,
-        nullptr,
-        OPEN_EXISTING,
-        0,
-        nullptr);
-    if (pipe_ != INVALID_HANDLE_VALUE)
-      return true;
-
-    QThread::msleep(100);
-  }
-
-  lastError_ = QStringLiteral("Failed to connect to render worker pipe.");
-  pipe_ = INVALID_HANDLE_VALUE;
-  return false;
 }
 
 bool RenderWorkerClient::sendPing()
 {
+#ifdef _WIN32
   if (pipe_ == INVALID_HANDLE_VALUE)
     return false;
+#else
+  if (socket_ == -1)
+    return false;
+#endif
 
   QString responsePayload;
   return sendRequest(static_cast<uint32_t>(ibrt::ipc::MessageType::Ping), QString(), &responsePayload);
@@ -428,7 +372,11 @@ bool RenderWorkerClient::sendRequestBytes(
     uint32_t type, const std::string &payload, std::string *responsePayload)
 {
   std::lock_guard<std::mutex> lock(requestMutex_);
+#ifdef _WIN32
   if (pipe_ == INVALID_HANDLE_VALUE) {
+#else
+  if (socket_ == -1) {
+#endif
     lastError_ = QStringLiteral("Render worker pipe is not connected.");
     return false;
   }
@@ -437,17 +385,33 @@ bool RenderWorkerClient::sendRequestBytes(
   const ibrt::ipc::Message request{static_cast<ibrt::ipc::MessageType>(type),
       requestId,
       payload};
+#ifdef _WIN32
   if (!ibrt::ipc::writeMessage(pipe_, request)) {
+#else
+  if (!ibrt::ipc::writeMessage(socket_, request)) {
+#endif
     lastError_ = QStringLiteral("Failed to send request to render worker.");
+#ifdef _WIN32
     closePipe();
+#else
+    closeSocket();
+#endif
     emit workerConnectionChanged(false);
     return false;
   }
 
   ibrt::ipc::Message response;
+#ifdef _WIN32
   if (!ibrt::ipc::readMessage(pipe_, response)) {
+#else
+  if (!ibrt::ipc::readMessage(socket_, response)) {
+#endif
     lastError_ = QStringLiteral("Failed to read response from render worker.");
+#ifdef _WIN32
     closePipe();
+#else
+    closeSocket();
+#endif
     emit workerConnectionChanged(false);
     return false;
   }
@@ -504,11 +468,68 @@ bool RenderWorkerClient::sendRequestBytes(
   return true;
 }
 
+#ifdef _WIN32
+bool RenderWorkerClient::connectPipe()
+{
+  for (int attempt = 0; attempt < 50; ++attempt) {
+    pipe_ = CreateFileA(pipeName_.toStdString().c_str(),
+        GENERIC_READ | GENERIC_WRITE,
+        0,
+        nullptr,
+        OPEN_EXISTING,
+        0,
+        nullptr);
+    if (pipe_ != INVALID_HANDLE_VALUE)
+      return true;
+
+    QThread::msleep(100);
+  }
+
+  lastError_ = QStringLiteral("Failed to connect to render worker pipe.");
+  pipe_ = INVALID_HANDLE_VALUE;
+  return false;
+}
+
 void RenderWorkerClient::closePipe()
 {
   if (pipe_ != INVALID_HANDLE_VALUE) {
     CloseHandle(pipe_);
     pipe_ = INVALID_HANDLE_VALUE;
+  }
+}
+#else
+bool RenderWorkerClient::connectSocket()
+{
+  const std::string path = pipeName_.toStdString();
+  for (int attempt = 0; attempt < 50; ++attempt) {
+    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd == -1) {
+      lastError_ = QStringLiteral("Failed to create socket.");
+      return false;
+    }
+
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+
+    if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0) {
+      socket_ = fd;
+      return true;
+    }
+
+    ::close(fd);
+    QThread::msleep(100);
+  }
+
+  lastError_ = QStringLiteral("Failed to connect to render worker socket.");
+  return false;
+}
+
+void RenderWorkerClient::closeSocket()
+{
+  if (socket_ != -1) {
+    ::close(socket_);
+    socket_ = -1;
   }
 }
 #endif

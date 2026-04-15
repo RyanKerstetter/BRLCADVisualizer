@@ -10,6 +10,10 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -71,72 +75,14 @@ bool readPodPayload(const std::string &payload, T &out)
 
 } // namespace
 
-int main(int argc, char *argv[])
-{
-#ifndef _WIN32
-  fprintf(stderr, "IBRT render worker currently supports Windows only.\n");
-  return 1;
+// Shared message-dispatch loop used by both platforms.
+// Takes a platform-specific "pipe" handle (HANDLE on Windows, int fd on Linux).
+#ifdef _WIN32
+static int runMessageLoop(HANDLE pipe, OsprayBackend &backend)
 #else
-  std::string pipeName;
-  for (int i = 1; i + 1 < argc; ++i) {
-    if (std::string(argv[i]) == "--pipe") {
-      pipeName = argv[i + 1];
-      break;
-    }
-  }
-
-  if (pipeName.empty()) {
-    fprintf(stderr, "IBRT render worker missing --pipe argument.\n");
-    return 1;
-  }
-
-  HANDLE pipe = CreateNamedPipeA(pipeName.c_str(),
-      PIPE_ACCESS_DUPLEX,
-      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-      1,
-      64 * 1024,
-      64 * 1024,
-      0,
-      nullptr);
-  if (pipe == INVALID_HANDLE_VALUE) {
-    fprintf(stderr, "IBRT render worker failed to create named pipe.\n");
-    return 1;
-  }
-
-  if (!ConnectNamedPipe(pipe, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED) {
-    CloseHandle(pipe);
-    fprintf(stderr, "IBRT render worker failed to accept pipe connection.\n");
-    return 1;
-  }
-
-  int ac = argc;
-  const char **av = const_cast<const char **>(argv);
-  if (ospInit(&ac, av) != OSP_NO_ERROR) {
-    ibrt::ipc::writeMessage(
-        pipe, {ibrt::ipc::MessageType::Error, 0, "OSPRay initialization failed."});
-    CloseHandle(pipe);
-    return 1;
-  }
-
-  OSPDevice device = ospNewDevice("cpu");
-  if (!device) {
-    ibrt::ipc::writeMessage(
-        pipe, {ibrt::ipc::MessageType::Error, 0, "Failed to create OSPRay CPU device."});
-    ospShutdown();
-    CloseHandle(pipe);
-    return 1;
-  }
-
-  ospSetCurrentDevice(device);
-  ospDeviceSetErrorCallback(device, osprayErrorCallback, nullptr);
-  ospDeviceSetStatusCallback(device, osprayStatusCallback, nullptr);
-  ospCommit(reinterpret_cast<OSPObject>(device));
-  ospLoadModule("cpu");
-
-  OsprayBackend backend;
-  backend.init();
-  backend.resize(1, 1);
-
+static int runMessageLoop(int pipe, OsprayBackend &backend)
+#endif
+{
   bool running = true;
   while (running) {
     ibrt::ipc::Message message;
@@ -337,11 +283,127 @@ int main(int argc, char *argv[])
       break;
     }
   }
+  return 0;
+}
+
+int main(int argc, char *argv[])
+{
+  std::string pipeName;
+  for (int i = 1; i + 1 < argc; ++i) {
+    if (std::string(argv[i]) == "--pipe") {
+      pipeName = argv[i + 1];
+      break;
+    }
+  }
+
+  if (pipeName.empty()) {
+    fprintf(stderr, "IBRT render worker missing --pipe argument.\n");
+    return 1;
+  }
+
+#ifdef _WIN32
+  HANDLE pipe = CreateNamedPipeA(pipeName.c_str(),
+      PIPE_ACCESS_DUPLEX,
+      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+      1,
+      64 * 1024,
+      64 * 1024,
+      0,
+      nullptr);
+  if (pipe == INVALID_HANDLE_VALUE) {
+    fprintf(stderr, "IBRT render worker failed to create named pipe.\n");
+    return 1;
+  }
+
+  if (!ConnectNamedPipe(pipe, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED) {
+    CloseHandle(pipe);
+    fprintf(stderr, "IBRT render worker failed to accept pipe connection.\n");
+    return 1;
+  }
+#else
+  // Remove any stale socket file from a previous run.
+  ::unlink(pipeName.c_str());
+
+  int serverFd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (serverFd == -1) {
+    fprintf(stderr, "IBRT render worker failed to create socket.\n");
+    return 1;
+  }
+
+  sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  std::strncpy(addr.sun_path, pipeName.c_str(), sizeof(addr.sun_path) - 1);
+
+  if (::bind(serverFd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+    ::close(serverFd);
+    fprintf(stderr, "IBRT render worker failed to bind socket.\n");
+    return 1;
+  }
+
+  if (::listen(serverFd, 1) != 0) {
+    ::close(serverFd);
+    ::unlink(pipeName.c_str());
+    fprintf(stderr, "IBRT render worker failed to listen on socket.\n");
+    return 1;
+  }
+
+  int pipe = ::accept(serverFd, nullptr, nullptr);
+  ::close(serverFd);
+  if (pipe == -1) {
+    ::unlink(pipeName.c_str());
+    fprintf(stderr, "IBRT render worker failed to accept connection.\n");
+    return 1;
+  }
+#endif
+
+  int ac = argc;
+  const char **av = const_cast<const char **>(argv);
+  if (ospInit(&ac, av) != OSP_NO_ERROR) {
+    ibrt::ipc::writeMessage(
+        pipe, {ibrt::ipc::MessageType::Error, 0, "OSPRay initialization failed."});
+#ifdef _WIN32
+    CloseHandle(pipe);
+#else
+    ::close(pipe);
+    ::unlink(pipeName.c_str());
+#endif
+    return 1;
+  }
+
+  OSPDevice device = ospNewDevice("cpu");
+  if (!device) {
+    ibrt::ipc::writeMessage(
+        pipe, {ibrt::ipc::MessageType::Error, 0, "Failed to create OSPRay CPU device."});
+    ospShutdown();
+#ifdef _WIN32
+    CloseHandle(pipe);
+#else
+    ::close(pipe);
+    ::unlink(pipeName.c_str());
+#endif
+    return 1;
+  }
+
+  ospSetCurrentDevice(device);
+  ospDeviceSetErrorCallback(device, osprayErrorCallback, nullptr);
+  ospDeviceSetStatusCallback(device, osprayStatusCallback, nullptr);
+  ospCommit(reinterpret_cast<OSPObject>(device));
+  ospLoadModule("cpu");
+
+  OsprayBackend backend;
+  backend.init();
+  backend.resize(1, 1);
+
+  runMessageLoop(pipe, backend);
 
   ospShutdown();
+#ifdef _WIN32
   FlushFileBuffers(pipe);
   DisconnectNamedPipe(pipe);
   CloseHandle(pipe);
-  return 0;
+#else
+  ::close(pipe);
+  ::unlink(pipeName.c_str());
 #endif
+  return 0;
 }

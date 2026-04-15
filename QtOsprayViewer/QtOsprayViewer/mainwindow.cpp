@@ -64,7 +64,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
       });
 
   const QString workerPath =
-      QCoreApplication::applicationDirPath() + QStringLiteral("/IBRTRenderWorker.exe");
+      QCoreApplication::applicationDirPath() +
+#ifdef _WIN32
+      QStringLiteral("/IBRTRenderWorker.exe");
+#else
+      QStringLiteral("/IBRTRenderWorker");
+#endif
   if (!renderWorkerClient_->start(workerPath)) {
     statusBar()->showMessage(
         QStringLiteral("Render worker unavailable: %1").arg(renderWorkerClient_->lastError()));

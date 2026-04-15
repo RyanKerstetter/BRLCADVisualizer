@@ -56,7 +56,7 @@ bool ensureBrlcadModuleLoaded(std::string &errorOut)
     if (!loaded) {
       loadError =
           "Failed to load BRL-CAD OSPRay module 'brl_cad'. Ensure "
-          "'ospray_module_brl_cad.dll' is deployed in the IBRT runtime folder "
+          "'libospray_module_brl_cad.so.3.3.0' is deployed next to libospray.so "
           "(set BRLCAD_OSPRAY_MODULE_DLL in CMake if needed).";
     }
   }
@@ -1062,7 +1062,8 @@ void OsprayBackend::applyDefaultLights()
 void OsprayBackend::applyDefaultMaterial(ospray::cpp::GeometricModel &model)
 {
   ospray::cpp::Material material("obj");
-  material.setParam("kd", vec3f(0.8f, 0.8f, 0.8f));
+  // Use white so BRL-CAD region colors (dg.color) are not muted by kd multiplication.
+  material.setParam("kd", vec3f(1.0f, 1.0f, 1.0f));
   material.commit();
   model.setParam("material", material);
 }

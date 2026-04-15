@@ -93,7 +93,8 @@ static inline uint32_t packRegionColor(float r, float g, float b, float a = 1.0f
 
 static inline uint32_t fallbackRegionColor()
 {
-  return packRegionColor(0.8f, 0.8f, 0.8f, 1.0f);
+  // DEBUG: bright red so we can tell if postIntersect runs but ma_color_valid is 0
+  return packRegionColor(1.0f, 0.0f, 0.0f, 1.0f);
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +408,7 @@ void BRLCAD::commit()
   }
   rt_prep_parallel(rtip, nThreads);
 
+  int coloredRegions = 0;
   if (rtip->Regions && rtip->nregions > 0) {
     for (size_t i = 0; i < rtip->nregions; ++i) {
       region *reg = rtip->Regions[i];
@@ -414,8 +416,20 @@ void BRLCAD::commit()
         continue;
 
       rt_region_color_map(reg);
+
+      if (reg->reg_mater.ma_color_valid) {
+        ++coloredRegions;
+        fprintf(stderr, "  region[%zu] '%s' color=(%.2f, %.2f, %.2f)\n",
+            i,
+            reg->reg_name ? reg->reg_name : "?",
+            reg->reg_mater.ma_color[0],
+            reg->reg_mater.ma_color[1],
+            reg->reg_mater.ma_color[2]);
+      }
     }
   }
+  fprintf(stderr, "BRLCAD: %zu regions total, %d have colors\n",
+      rtip->nregions, coloredRegions);
 
   bounds.lower.x = rtip->mdl_min[0];
   bounds.lower.y = rtip->mdl_min[1];

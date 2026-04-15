@@ -50,6 +50,9 @@ std::string makePipeName(uint32_t processId);
 #ifdef _WIN32
 bool writeMessage(HANDLE pipe, const Message &message);
 bool readMessage(HANDLE pipe, Message &message);
+#else
+bool writeMessage(int fd, const Message &message);
+bool readMessage(int fd, Message &message);
 #endif
 
 } // namespace ibrt::ipc
