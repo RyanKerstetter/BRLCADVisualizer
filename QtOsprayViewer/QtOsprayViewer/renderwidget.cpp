@@ -57,10 +57,11 @@ void RenderWidget::applyViewAction(
   vec3f forward = currentCameraForward();
   vec3f right = orbitRight();
   vec3f upCam = currentCameraUp();
+  const int verticalDelta = -delta.y();
 
   if (result.action == Action::Translate) {
     float sx = float(delta.x()) * panSpeed_ * dist_;
-    float sy = float(delta.y()) * panSpeed_ * dist_;
+    float sy = float(verticalDelta) * panSpeed_ * dist_;
 
     vec3f move(0.f, 0.f, 0.f);
 
@@ -69,7 +70,7 @@ void RenderWidget::applyViewAction(
           -right.y * sx + upCam.y * sy,
           -right.z * sx + upCam.z * sy);
     } else {
-      float axisDelta = float(delta.x() - delta.y()) * panSpeed_ * dist_;
+      float axisDelta = float(delta.x() + verticalDelta) * panSpeed_ * dist_;
 
       if (result.axis == Axis::X)
         move = vec3f(axisDelta, 0.f, 0.f);
@@ -84,7 +85,7 @@ void RenderWidget::applyViewAction(
 
   else if (result.action == Action::Rotate) {
     float dx = delta.x() * orbitSpeed_;
-    float dy = delta.y() * orbitSpeed_;
+    float dy = verticalDelta * orbitSpeed_;
 
     if (result.axis == Axis::Free) {
       rotateOrbit(dx, dy);
@@ -119,7 +120,7 @@ void RenderWidget::applyViewAction(
   }
 
   else if (result.action == Action::Scale) {
-    float amount = float(delta.y()) * 0.01f;
+    float amount = float(verticalDelta) * 0.01f;
 
     float maxExtent = sceneBoundsMaxExtent();
     if (maxExtent < 0.001f)
@@ -1196,6 +1197,7 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
 
   const QPoint d = e->pos() - lastMouse_;
   lastMouse_ = e->pos();
+  const int verticalDelta = -d.y();
 
   auto result = InteractionController::classify(e->buttons(), e->modifiers());
 
@@ -1207,7 +1209,7 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
 
     // Fallback to original behavior when no modifiers are pressed
     if (e->buttons() & Qt::LeftButton) {
-      rotateOrbit(d.x() * orbitSpeed_, d.y() * orbitSpeed_);
+      rotateOrbit(d.x() * orbitSpeed_, verticalDelta * orbitSpeed_);
 
       syncCameraToBackend();
       renderOnce();
@@ -1219,7 +1221,7 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
       vec3f upCam = currentCameraUp();
 
       float sx = float(d.x()) * panSpeed_ * dist_;
-      float sy = float(d.y()) * panSpeed_ * dist_;
+      float sy = float(verticalDelta) * panSpeed_ * dist_;
 
       center_ = vec3f(center_.x - right.x * sx + upCam.x * sy,
           center_.y - right.y * sx + upCam.y * sy,
@@ -1233,7 +1235,7 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
   } else {
     if (e->buttons() & Qt::LeftButton) {
       flyYaw_ += d.x() * orbitSpeed_;
-      flyPitch_ += d.y() * orbitSpeed_;
+      flyPitch_ += verticalDelta * orbitSpeed_;
 
       syncCameraToBackend();
       renderOnce();
