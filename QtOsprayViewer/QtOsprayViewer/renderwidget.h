@@ -111,7 +111,10 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   rkcommon::math::vec3f rotateAroundAxis(
       const rkcommon::math::vec3f &v, const rkcommon::math::vec3f &axis, float angle) const;
   void rotateOrbit(float yawDelta, float pitchDelta);
-  float flyMoveFactor_ = 0.005f;
+  float defaultFlyMoveStep() const;
+  float flyMoveStep() const;
+  void resetFlySpeed();
+  float flyMoveStep_ = 0.0f;
   void syncCameraToBackend();
   bool usingWorkerRenderPath() const;
   void resetAccumulationTargets();

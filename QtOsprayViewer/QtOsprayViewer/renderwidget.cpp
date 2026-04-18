@@ -941,6 +941,26 @@ void RenderWidget::paintGL()
     setInputMode(InputMode::Fly);
   }
 
+  if (!orbitMode) {
+    const float defaultFlyStep = defaultFlyMoveStep();
+    const float minFlyStep = std::max(defaultFlyStep * 0.1f, 0.0001f);
+    const float maxFlyStep = std::max(defaultFlyStep * 10.0f, minFlyStep * 2.0f);
+    float flySpeed = flyMoveStep();
+    if (ImGui::SliderFloat("Fly speed", &flySpeed, minFlyStep, maxFlyStep, "%.4f")) {
+      flyMoveStep_ = clampf(flySpeed, minFlyStep, maxFlyStep);
+      renderOnce();
+      update();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset fly speed")) {
+      resetFlySpeed();
+      renderOnce();
+      update();
+    }
+    ImGui::Text("Move step: %.4f", flyMoveStep());
+    ImGui::Text("Default step: %.4f", defaultFlyStep);
+  }
+
   ImGui::Separator();
   ImGui::Text("Controls");
   ImGui::PushTextWrapPos(0.0f);
@@ -989,6 +1009,7 @@ bool RenderWidget::loadModel(const QString &path)
               currentBrlcadPath_.clear();
               currentBrlcadObject_.clear();
               currentBrlcadObjects_.clear();
+              resetFlySpeed();
               resetView();
             } else {
               update();
@@ -1012,6 +1033,7 @@ bool RenderWidget::loadModel(const QString &path)
             currentBrlcadPath_.clear();
             currentBrlcadObject_.clear();
             currentBrlcadObjects_.clear();
+            resetFlySpeed();
             resetView();
           } else {
             update();
@@ -1051,6 +1073,7 @@ bool RenderWidget::loadBrlcadModel(const QString &path, const QString &topObject
               currentBrlcadPath_ = path;
               currentBrlcadObject_ = resolvedObject;
               currentBrlcadObjects_ = availableObjects;
+              resetFlySpeed();
               resetView();
             } else {
               update();
@@ -1077,6 +1100,7 @@ bool RenderWidget::loadBrlcadModel(const QString &path, const QString &topObject
                 currentBrlcadPath_ = path;
                 currentBrlcadObject_ = resolvedObject;
                 currentBrlcadObjects_ = availableObjects;
+                resetFlySpeed();
                 resetView();
               } else {
                 update();
@@ -1364,12 +1388,7 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
 
   vec3f forward = forwardFromAngles(flyYaw_, flyPitch_);
   vec3f right = normalizeVec(crossVec(forward, worldUp()));
-
-  float modelScale = sceneBoundsMaxExtent();
-  if (modelScale < 0.001f)
-    modelScale = 1.0f;
-
-  float step = modelScale * flyMoveFactor_;
+  const float step = flyMoveStep();
 
   if (e->key() == Qt::Key_W)
     flyPos_ = vec3f(flyPos_.x + forward.x * step,
@@ -1675,4 +1694,26 @@ void RenderWidget::rotateOrbit(float yawDelta, float pitchDelta)
   orbitTheta_ += yawDelta;
   orbitPhi_ = clampf(orbitPhi_ + pitchDelta, 0.001f, 3.14159265f - 0.001f);
   syncFlyFromOrbit();
+}
+
+float RenderWidget::flyMoveStep() const
+{
+  if (flyMoveStep_ > 0.0f)
+    return flyMoveStep_;
+
+  return defaultFlyMoveStep();
+}
+
+float RenderWidget::defaultFlyMoveStep() const
+{
+  float modelScale = sceneBoundsMaxExtent();
+  if (modelScale < 0.001f)
+    modelScale = 1.0f;
+
+  return modelScale * 0.005f;
+}
+
+void RenderWidget::resetFlySpeed()
+{
+  flyMoveStep_ = defaultFlyMoveStep();
 }
