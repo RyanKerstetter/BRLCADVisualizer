@@ -13,6 +13,15 @@
 class OsprayBackend
 {
  public:
+  struct BrlcadNode
+  {
+    std::string name;
+    bool isCombination = false;
+    bool isRegion = false;
+    bool isPrimitive = false;
+    std::vector<BrlcadNode> children;
+  };
+
   enum class SettingsMode
   {
     Automatic,
@@ -43,6 +52,7 @@ class OsprayBackend
   bool loadObj(const std::string &path);
   bool loadBrlcad(const std::string &path, const std::string &topObject = "");
   std::vector<std::string> listBrlcadObjects(const std::string &path) const;
+  std::vector<BrlcadNode> listBrlcadHierarchy(const std::string &path) const;
   void loadTestMesh();
 
   rkcommon::math::vec3f getBoundsCenter() const;

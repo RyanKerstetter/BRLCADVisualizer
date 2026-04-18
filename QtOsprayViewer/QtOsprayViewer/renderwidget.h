@@ -14,6 +14,7 @@
 #include <atomic>
 #include <functional>
 #include <thread>
+#include <vector>
 
 #include <ospray/ospray_cpp/ext/rkcommon.h>
 #include "renderworkerclient.h"

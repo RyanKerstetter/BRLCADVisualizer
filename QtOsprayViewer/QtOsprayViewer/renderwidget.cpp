@@ -998,6 +998,7 @@ bool RenderWidget::loadBrlcadModel(const QString &path, const QString &topObject
   const QString resolvedObject =
       topObject.trimmed().isEmpty() ? QStringLiteral("all") : topObject.trimmed();
   const QStringList availableObjects = listBrlcadObjects(path);
+  currentBrlcadObjects_ = availableObjects;
 
   startAsyncLoad(
       [this, path, resolvedObject, availableObjects]() {

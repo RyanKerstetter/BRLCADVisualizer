@@ -3,19 +3,238 @@
 #include "renderworkerclient.h"
 
 #include <algorithm>
+#include <functional>
 #include <QAction>
 #include <QActionGroup>
 #include <QCoreApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QInputDialog>
+#include <QHeaderView>
+#include <QLineEdit>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QTimer>
 #include <QStatusBar>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
+#include <QVBoxLayout>
 
 #include <QLabel>
+
+namespace {
+QString defaultBrlcadObject(const QStringList &objects, const QString &currentObject)
+{
+  if (objects.contains(QStringLiteral("all.g")))
+    return QStringLiteral("all.g");
+  if (objects.contains(QStringLiteral("all")))
+    return QStringLiteral("all");
+  if (!currentObject.trimmed().isEmpty() && objects.contains(currentObject))
+    return currentObject;
+  return objects.isEmpty() ? QString() : objects.front();
+}
+
+QString hierarchyNodeLabel(const OsprayBackend::BrlcadNode &node)
+{
+  QString label = QString::fromStdString(node.name);
+  if (node.isRegion)
+    label += QStringLiteral(" [region]");
+  else if (node.isCombination)
+    label += QStringLiteral(" [comb]");
+  else if (node.isPrimitive)
+    label += QStringLiteral(" [solid]");
+  return label;
+}
+
+std::vector<OsprayBackend::BrlcadNode> buildSafeHierarchyFromObjectList(const QStringList &objects)
+{
+  std::vector<OsprayBackend::BrlcadNode> roots;
+
+  OsprayBackend::BrlcadNode root;
+  root.name = objects.contains(QStringLiteral("all.g")) ? "all.g" : "all";
+  root.isCombination = true;
+
+  auto classifyLeaf = [](const QString &name) {
+    OsprayBackend::BrlcadNode node;
+    node.name = name.toStdString();
+    const QString lower = name.toLower();
+    if (lower.endsWith(QStringLiteral(".r"))) {
+      node.isCombination = true;
+      node.isRegion = true;
+    } else {
+      node.isPrimitive = true;
+    }
+    return node;
+  };
+
+  QStringList remaining = objects;
+  remaining.removeAll(QStringLiteral("all.g"));
+  remaining.removeAll(QStringLiteral("all"));
+  remaining.sort(Qt::CaseInsensitive);
+
+  QSet<QString> consumed;
+
+  for (const QString &name : remaining) {
+    if (consumed.contains(name))
+      continue;
+
+    const QString lower = name.toLower();
+    if (lower.endsWith(QStringLiteral(".r"))) {
+      OsprayBackend::BrlcadNode region = classifyLeaf(name);
+
+      QString solidCandidate = name;
+      solidCandidate.chop(2);
+      solidCandidate += QStringLiteral(".s");
+
+      QString bareCandidate = name;
+      bareCandidate.chop(2);
+
+      if (remaining.contains(solidCandidate, Qt::CaseInsensitive)) {
+        consumed.insert(solidCandidate);
+        region.children.push_back(classifyLeaf(solidCandidate));
+      } else if (remaining.contains(bareCandidate, Qt::CaseInsensitive)) {
+        consumed.insert(bareCandidate);
+        region.children.push_back(classifyLeaf(bareCandidate));
+      }
+
+      root.children.push_back(std::move(region));
+      consumed.insert(name);
+      continue;
+    }
+
+    if (lower.endsWith(QStringLiteral(".s"))) {
+      OsprayBackend::BrlcadNode solid = classifyLeaf(name);
+      root.children.push_back(std::move(solid));
+      consumed.insert(name);
+      continue;
+    }
+
+    OsprayBackend::BrlcadNode node = classifyLeaf(name);
+    root.children.push_back(std::move(node));
+    consumed.insert(name);
+  }
+
+  roots.push_back(std::move(root));
+  return roots;
+}
+
+void populateHierarchyItem(QTreeWidgetItem *parent,
+    const OsprayBackend::BrlcadNode &node,
+    const QString &currentObject,
+    QTreeWidgetItem *&selectedItem)
+{
+  auto *item = new QTreeWidgetItem(QStringList{hierarchyNodeLabel(node)});
+  item->setData(0, Qt::UserRole, QString::fromStdString(node.name));
+  if (parent)
+    parent->addChild(item);
+
+  if (QString::fromStdString(node.name) == currentObject)
+    selectedItem = item;
+
+  for (const auto &child : node.children)
+    populateHierarchyItem(item, child, currentObject, selectedItem);
+}
+
+QString chooseBrlcadObjectHierarchy(QWidget *parent,
+    const std::vector<OsprayBackend::BrlcadNode> &roots,
+    const QString &currentObject)
+{
+  if (roots.empty())
+    return QString();
+
+  QDialog dialog(parent);
+  dialog.setWindowTitle(QStringLiteral("Load BRL-CAD Object"));
+  dialog.resize(520, 560);
+
+  auto *layout = new QVBoxLayout(&dialog);
+  auto *filterEdit = new QLineEdit(&dialog);
+  filterEdit->setPlaceholderText(QStringLiteral("Filter objects..."));
+  layout->addWidget(filterEdit);
+
+  auto *tree = new QTreeWidget(&dialog);
+  tree->setColumnCount(1);
+  tree->setHeaderHidden(true);
+  tree->setUniformRowHeights(true);
+  tree->header()->setStretchLastSection(true);
+  layout->addWidget(tree);
+
+  auto *buttons =
+      new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  auto *okButton = buttons->button(QDialogButtonBox::Ok);
+  okButton->setEnabled(false);
+  layout->addWidget(buttons);
+
+  QTreeWidgetItem *selectedItem = nullptr;
+  for (const auto &root : roots) {
+    auto *rootItem = new QTreeWidgetItem(QStringList{hierarchyNodeLabel(root)});
+    rootItem->setData(0, Qt::UserRole, QString::fromStdString(root.name));
+    tree->addTopLevelItem(rootItem);
+    if (QString::fromStdString(root.name) == currentObject)
+      selectedItem = rootItem;
+    for (const auto &child : root.children)
+      populateHierarchyItem(rootItem, child, currentObject, selectedItem);
+  }
+
+  tree->expandToDepth(1);
+  if (selectedItem) {
+    tree->setCurrentItem(selectedItem);
+    selectedItem->setSelected(true);
+    for (QTreeWidgetItem *walk = selectedItem->parent(); walk; walk = walk->parent())
+      walk->setExpanded(true);
+  }
+
+  auto updateSelectionState = [tree, okButton]() {
+    const auto *item = tree->currentItem();
+    okButton->setEnabled(item && !item->data(0, Qt::UserRole).toString().isEmpty());
+  };
+
+  auto applyFilter = [tree](const QString &text) {
+    const QString needle = text.trimmed();
+    std::function<bool(QTreeWidgetItem *)> visit = [&](QTreeWidgetItem *item) -> bool {
+      bool childVisible = false;
+      for (int i = 0; i < item->childCount(); ++i)
+        childVisible = visit(item->child(i)) || childVisible;
+
+      const QString display = item->text(0);
+      const QString objectName = item->data(0, Qt::UserRole).toString();
+      const bool selfMatch = needle.isEmpty()
+          || display.contains(needle, Qt::CaseInsensitive)
+          || objectName.contains(needle, Qt::CaseInsensitive);
+      const bool visible = selfMatch || childVisible;
+      item->setHidden(!visible);
+      if (!needle.isEmpty() && childVisible)
+        item->setExpanded(true);
+      return visible;
+    };
+
+    for (int i = 0; i < tree->topLevelItemCount(); ++i)
+      visit(tree->topLevelItem(i));
+  };
+
+  QObject::connect(filterEdit, &QLineEdit::textChanged, &dialog, applyFilter);
+  QObject::connect(tree,
+      &QTreeWidget::currentItemChanged,
+      &dialog,
+      [updateSelectionState](QTreeWidgetItem *, QTreeWidgetItem *) { updateSelectionState(); });
+  QObject::connect(tree, &QTreeWidget::itemDoubleClicked, &dialog,
+      [&dialog](QTreeWidgetItem *item, int) {
+        if (!item->data(0, Qt::UserRole).toString().isEmpty())
+          dialog.accept();
+      });
+  QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+  updateSelectionState();
+
+  if (dialog.exec() != QDialog::Accepted || !tree->currentItem())
+    return QString();
+
+  return tree->currentItem()->data(0, Qt::UserRole).toString();
+}
+} // namespace
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
@@ -125,7 +344,7 @@ void MainWindow::setupMenus()
   viewMenu->addAction(yUpAction);
   viewMenu->addAction(zUpAction);
 
-  selectBrlcadObjectAction_ = new QAction("Select Object...", this);
+  selectBrlcadObjectAction_ = new QAction("Object Hierarchy", this);
   brlcadMenu->addAction(selectBrlcadObjectAction_);
   updateBrlcadMenuState();
   populateDemoModelsMenu(demoMenu);
@@ -205,6 +424,8 @@ void MainWindow::setupMenus()
   });
 
   connect(selectBrlcadObjectAction_, &QAction::triggered, this, [this]() {
+    if (!renderWidget_->hasBrlcadScene())
+      return;
     chooseAndLoadBrlcadObject(
         renderWidget_->currentBrlcadPath(), renderWidget_->currentBrlcadObjects());
   });
@@ -273,7 +494,8 @@ QString MainWindow::demoModelsDir() const
 
 void MainWindow::loadStartupDemo()
 {
-  if (!renderWidget_ || renderWidget_->hasBrlcadScene() || !renderWidget_->currentBrlcadPath().isEmpty())
+  if (!renderWidget_ || renderWidget_->hasBrlcadScene()
+      || !renderWidget_->currentBrlcadPath().isEmpty())
     return;
 
   const QString path = defaultDemoPath();
@@ -307,18 +529,11 @@ void MainWindow::chooseAndLoadBrlcadObject(
     return;
   }
 
-  bool ok = false;
-  const QString current = renderWidget_->currentBrlcadObject();
-  const qsizetype foundIndex = choices.indexOf(current);
-  const int currentIndex = foundIndex >= 0 ? static_cast<int>(foundIndex) : 0;
-  const QString obj = QInputDialog::getItem(this,
-      "Load BRL-CAD Object",
-      "Choose or enter object name to render:",
-      choices,
-      currentIndex,
-      true,
-      &ok);
-  if (!ok)
+  const auto hierarchy = buildSafeHierarchyFromObjectList(choices);
+  QString obj = chooseBrlcadObjectHierarchy(this, hierarchy, renderWidget_->currentBrlcadObject());
+  if (obj.isEmpty())
+    obj = defaultBrlcadObject(choices, renderWidget_->currentBrlcadObject());
+  if (obj.isEmpty())
     return;
 
   if (!renderWidget_->loadBrlcadModel(path, obj)) {
@@ -328,5 +543,8 @@ void MainWindow::chooseAndLoadBrlcadObject(
             ? "Could not load BRL-CAD .g file.\n"
               "Check that the object name exists in the database."
             : detail);
+    return;
   }
+
+  statusBar()->showMessage(QStringLiteral("Loaded BRL-CAD object: %1").arg(obj), 5000);
 }

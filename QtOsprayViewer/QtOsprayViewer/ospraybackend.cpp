@@ -6,7 +6,9 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <functional>
 #include <stdexcept>
+#include <unordered_set>
 
 #include <ospray/ospray.h>
 #define TINYOBJLOADER_IMPLEMENTATION
@@ -1394,4 +1396,124 @@ std::vector<std::string> OsprayBackend::listBrlcadObjects(
     bu_free(dpv, "db_ls object list");
   rt_free_rti(tmpRtip);
   return names;
+}
+
+std::vector<OsprayBackend::BrlcadNode> OsprayBackend::listBrlcadHierarchy(
+    const std::string &path) const
+{
+  std::vector<BrlcadNode> roots;
+  if (path.empty())
+    return roots;
+
+  rt_i *tmpRtip = rt_dirbuild(path.c_str(), nullptr, 0);
+  if (!tmpRtip || !tmpRtip->rti_dbip)
+    return roots;
+
+  struct resource localResource;
+  rt_init_resource(&localResource, 0, tmpRtip);
+
+  struct CleanupGuard
+  {
+    rt_i *rtip = nullptr;
+    directory **dpv = nullptr;
+    resource *resp = nullptr;
+    ~CleanupGuard()
+    {
+      if (dpv)
+        bu_free(dpv, "db_ls hierarchy roots");
+      if (rtip && resp)
+        rt_clean_resource(rtip, resp);
+      if (rtip)
+        rt_free_rti(rtip);
+    }
+  } cleanup{tmpRtip, nullptr, &localResource};
+
+  directory **dpv = nullptr;
+  cleanup.dpv = dpv;
+  const size_t count =
+      db_ls(tmpRtip->rti_dbip, DB_LS_TOPS | DB_LS_COMB | DB_LS_REGION, nullptr, &dpv);
+  cleanup.dpv = dpv;
+
+  std::function<BrlcadNode(const directory *, std::unordered_set<std::string> &)> buildDirectoryNode;
+  std::function<void(const union tree *, BrlcadNode &, std::unordered_set<std::string> &)> appendTreeChildren;
+
+  buildDirectoryNode = [&](const directory *dp,
+                           std::unordered_set<std::string> &ancestry) -> BrlcadNode {
+    BrlcadNode node;
+    if (!dp || !dp->d_namep)
+      return node;
+
+    node.name = dp->d_namep;
+
+    struct rt_db_internal intern;
+    RT_DB_INTERNAL_INIT(&intern);
+    if (rt_db_get_internal(&intern, dp, tmpRtip->rti_dbip, nullptr, &localResource) < 0) {
+      node.isPrimitive = true;
+      return node;
+    }
+
+    const bool isCombination = intern.idb_type == ID_COMBINATION;
+    node.isCombination = isCombination;
+    node.isPrimitive = !isCombination;
+
+    if (isCombination) {
+      const auto *comb = static_cast<const rt_comb_internal *>(intern.idb_ptr);
+      if (comb) {
+        node.isRegion = comb->region_flag != 0;
+        if (ancestry.insert(node.name).second) {
+          appendTreeChildren(comb->tree, node, ancestry);
+          ancestry.erase(node.name);
+        }
+      }
+    }
+
+    rt_db_free_internal(&intern);
+    return node;
+  };
+
+  appendTreeChildren = [&](const union tree *tree,
+                           BrlcadNode &parent,
+                           std::unordered_set<std::string> &ancestry) {
+    if (!tree)
+      return;
+
+    switch (tree->tr_op) {
+    case OP_DB_LEAF: {
+      if (!tree->tr_l.tl_name || !*tree->tr_l.tl_name)
+        return;
+      const directory *leafDp = db_lookup(tmpRtip->rti_dbip, tree->tr_l.tl_name, LOOKUP_QUIET);
+      if (!leafDp)
+        return;
+      parent.children.push_back(buildDirectoryNode(leafDp, ancestry));
+      return;
+    }
+    case OP_UNION:
+    case OP_INTERSECT:
+    case OP_SUBTRACT:
+    case OP_XOR:
+      appendTreeChildren(tree->tr_b.tb_left, parent, ancestry);
+      appendTreeChildren(tree->tr_b.tb_right, parent, ancestry);
+      return;
+    case OP_NOT:
+    case OP_GUARD:
+    case OP_XNOP:
+      appendTreeChildren(tree->tr_b.tb_left, parent, ancestry);
+      return;
+    default:
+      return;
+    }
+  };
+
+  for (size_t i = 0; i < count; ++i) {
+    if (!dpv[i] || !dpv[i]->d_namep || !*dpv[i]->d_namep)
+      continue;
+    std::unordered_set<std::string> ancestry;
+    roots.push_back(buildDirectoryNode(dpv[i], ancestry));
+  }
+
+  std::sort(roots.begin(), roots.end(), [](const BrlcadNode &a, const BrlcadNode &b) {
+    return a.name < b.name;
+  });
+
+  return roots;
 }
