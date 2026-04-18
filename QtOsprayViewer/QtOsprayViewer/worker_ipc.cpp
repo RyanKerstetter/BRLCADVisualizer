@@ -4,6 +4,7 @@
 
 namespace ibrt::ipc {
 
+// Builds a unique pipe name for a viewer/worker pair based on the viewer process ID.
 std::string makePipeName(uint32_t processId)
 {
   return "\\\\.\\pipe\\IBRT.RenderWorker." + std::to_string(processId);
@@ -12,8 +13,10 @@ std::string makePipeName(uint32_t processId)
 #ifdef _WIN32
 namespace {
 
+// Writes a full message buffer to the pipe, retrying until all bytes are sent.
 bool writeAll(HANDLE pipe, const void *data, DWORD size)
 {
+  // Named-pipe writes are not guaranteed to complete in one call.
   const auto *bytes = static_cast<const uint8_t *>(data);
   DWORD totalWritten = 0;
   while (totalWritten < size) {
@@ -25,8 +28,10 @@ bool writeAll(HANDLE pipe, const void *data, DWORD size)
   return true;
 }
 
+// Reads an exact byte count from the pipe before returning control to the caller.
 bool readAll(HANDLE pipe, void *data, DWORD size)
 {
+  // Mirror writeAll() so higher-level message parsing can assume exact sizes.
   auto *bytes = static_cast<uint8_t *>(data);
   DWORD totalRead = 0;
   while (totalRead < size) {
@@ -42,8 +47,11 @@ bool readAll(HANDLE pipe, void *data, DWORD size)
 
 } // namespace
 
+// Serializes and writes one protocol message to the named pipe.
 bool writeMessage(HANDLE pipe, const Message &message)
 {
+  // Every payload is preceded by a fixed-size header so the receiver can safely
+  // validate message type and byte count before parsing.
   MessageHeader header;
   header.type = static_cast<uint32_t>(message.type);
   header.requestId = message.requestId;
@@ -60,6 +68,7 @@ bool writeMessage(HANDLE pipe, const Message &message)
   return true;
 }
 
+// Reads and validates one protocol message from the named pipe.
 bool readMessage(HANDLE pipe, Message &message)
 {
   MessageHeader header;

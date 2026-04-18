@@ -30,6 +30,7 @@ const vec3f kSunLightDirection(-0.3f, -1.0f, -0.2f);
 const vec3f kFillLightDirection(0.65f, -0.45f, 0.55f);
 const vec3f kRimLightDirection(-0.55f, -0.2f, 0.75f);
 
+// Normalizes a lighting direction and falls back to a sensible default for degenerate input.
 vec3f normalizeDirection(const vec3f &v)
 {
   const float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
@@ -38,6 +39,7 @@ vec3f normalizeDirection(const vec3f &v)
   return vec3f(v.x / len, v.y / len, v.z / len);
 }
 
+// Returns a copy of the string with surrounding whitespace removed.
 std::string trimCopy(const std::string &value)
 {
   const auto first = value.find_first_not_of(" \t\r\n");
@@ -48,8 +50,11 @@ std::string trimCopy(const std::string &value)
   return value.substr(first, last - first + 1);
 }
 
+// Loads the custom BRL-CAD OSPRay module once and caches the outcome for future calls.
 bool ensureBrlcadModuleLoaded(std::string &errorOut)
 {
+  // Module loading is cached because both scene enumeration and scene loading
+  // may ask for BRL-CAD support repeatedly during a session.
   static bool attempted = false;
   static bool loaded = false;
   static std::string loadError;
@@ -71,8 +76,11 @@ bool ensureBrlcadModuleLoaded(std::string &errorOut)
   return loaded;
 }
 
+// Builds the default light rig used for scenes that have no explicit authored lighting.
 std::vector<ospray::cpp::Light> makeDefaultLights(const std::string &rendererType)
 {
+  // The viewer supplies a minimal house-light rig so imported scenes remain
+  // readable even when the source data has no authored lights.
   std::vector<ospray::cpp::Light> lights;
 
   if (rendererType == "pathtracer") {
@@ -130,9 +138,12 @@ std::vector<ospray::cpp::Light> makeDefaultLights(const std::string &rendererTyp
 }
 }
 
+// Creates the default renderer, camera, and fallback test scene.
 void OsprayBackend::init()
 {
   try {
+    // Start from a conservative renderer/camera pair so the widget has
+    // something valid to show before any external scene is loaded.
     renderer_ = ospray::cpp::Renderer("scivis");
     currentRenderer_ = "scivis";
     applyRendererDefaults();
@@ -153,9 +164,12 @@ void OsprayBackend::init()
   }
 }
 
+// Resizes framebuffers and queues a fresh render at the new resolution.
 void OsprayBackend::resize(int w, int h)
 {
   if (frameInFlight_) {
+    // Resize is deferred while a frame is active so framebuffer ownership
+    // changes happen only at safe synchronization points.
     pendingResizeW_ = std::max(1, w);
     pendingResizeH_ = std::max(1, h);
     pendingResize_ = true;
@@ -177,10 +191,13 @@ void OsprayBackend::resize(int w, int h)
   enqueueLatestRenderRequest("resize");
 }
 
+// Updates the active camera parameters and schedules a new render.
 void OsprayBackend::setCamera(const vec3f &eye, const vec3f &center, const vec3f &up, float fovyDeg)
 {
   ++cameraVersion_;
   if (frameInFlight_) {
+    // Interactive camera motion is allowed to preempt non-preview work so the
+    // viewport stays responsive while the user drags.
     if (isInteracting_ && activeRenderRequest_
         && activeRenderRequest_->type != RenderRequestType::Preview) {
       cancelInFlightFrame("camera_move_preempt");
@@ -201,6 +218,7 @@ void OsprayBackend::setCamera(const vec3f &eye, const vec3f &center, const vec3f
   enqueueLatestRenderRequest("camera");
 }
 
+// Clears progressive accumulation so the next render starts from a clean state.
 void OsprayBackend::resetAccumulation()
 {
   if (frameInFlight_) {
@@ -218,12 +236,14 @@ const uint32_t *OsprayBackend::pixels() const
   return displayPixels_.empty() ? nullptr : displayPixels_.data();
 }
 
+// Advances the progressive render state machine and returns whether the display changed.
 bool OsprayBackend::advanceRender(int timeBudgetMs)
 {
   try {
     (void)timeBudgetMs;
 
     if (frameInFlight_) {
+      // Poll the current asynchronous OSPRay future until the frame completes.
       if (!currentFrame_.handle()) {
         frameInFlight_ = false;
         inFlightStartValid_ = false;
@@ -246,6 +266,8 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
 
     applyPendingState();
 
+    // Rendering alternates between low-resolution progressive passes and
+    // optional full-resolution accumulation once the camera settles.
     const bool accumulationEnabled = accumulationEnabledForCurrentMode();
     const int maxAccumulationFrames = maxAccumulationFramesForCurrentMode();
     const bool fullResAccumOnly = fullResAccumulationOnlyForCurrentMode();
@@ -290,11 +312,13 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
   }
 }
 
+// Returns the last completed frame time in milliseconds.
 float OsprayBackend::lastFrameTimeMs() const
 {
   return lastFrameTimeMs_;
 }
 
+// Returns the measured render throughput for the last completed frame sequence.
 float OsprayBackend::renderFPS() const
 {
   if (lastFrameTimeMs_ <= 0.0001f)
@@ -302,16 +326,19 @@ float OsprayBackend::renderFPS() const
   return 1000.0f / lastFrameTimeMs_;
 }
 
+// Returns the minimum corner of the current scene bounds.
 rkcommon::math::vec3f OsprayBackend::getBoundsMin() const
 {
   return boundsMin_;
 }
 
+// Returns the maximum corner of the current scene bounds.
 rkcommon::math::vec3f OsprayBackend::getBoundsMax() const
 {
   return boundsMax_;
 }
 
+// Returns the longest axis length of the current scene bounds.
 float OsprayBackend::getBoundsMaxExtent() const
 {
   float dx = boundsMax_.x - boundsMin_.x;
@@ -320,6 +347,7 @@ float OsprayBackend::getBoundsMaxExtent() const
   return std::max(dx, std::max(dy, dz));
 }
 
+// Returns the center point of the current scene bounds.
 rkcommon::math::vec3f OsprayBackend::getBoundsCenter() const
 {
   return rkcommon::math::vec3f(0.5f * (boundsMin_.x + boundsMax_.x),
@@ -327,6 +355,7 @@ rkcommon::math::vec3f OsprayBackend::getBoundsCenter() const
       0.5f * (boundsMin_.z + boundsMax_.z));
 }
 
+// Returns an approximate radius derived from the current scene bounds.
 float OsprayBackend::getBoundsRadius() const
 {
   float dx = boundsMax_.x - boundsMin_.x;
@@ -337,6 +366,7 @@ float OsprayBackend::getBoundsRadius() const
   return std::max(0.5f * diag, 0.001f);
 }
 
+// Builds a simple fallback triangle mesh used before a real scene is loaded.
 void OsprayBackend::loadTestMesh()
 {
   std::vector<vec3f> vertex = {vec3f(-1.0f, -1.0f, 3.0f),
@@ -387,6 +417,7 @@ void OsprayBackend::loadTestMesh()
   resetAccumulation();
 }
 
+// Loads an OBJ file into OSPRay scene objects and resets progressive state.
 bool OsprayBackend::loadObj(const std::string &path)
 {
   if (frameInFlight_) {
@@ -500,6 +531,7 @@ bool OsprayBackend::loadObj(const std::string &path)
 }
 
 
+// Loads a BRL-CAD database/object pair into OSPRay scene objects.
 bool OsprayBackend::loadBrlcad(
     const std::string &path, const std::string &topObject)
 {
@@ -618,6 +650,7 @@ bool OsprayBackend::loadBrlcad(
   }
 }
 
+// Switches the active renderer type and reapplies renderer-specific defaults.
 void OsprayBackend::setRenderer(const std::string &type)
 {
   if (frameInFlight_) {
@@ -649,11 +682,13 @@ void OsprayBackend::setRenderer(const std::string &type)
   }
 }
 
+// Returns the active renderer name.
 const std::string &OsprayBackend::currentRenderer() const
 {
   return currentRenderer_;
 }
 
+// Sets ambient-occlusion sampling for the current rendering mode.
 void OsprayBackend::setAoSamples(int samples)
 {
   if (frameInFlight_) {
@@ -669,6 +704,7 @@ void OsprayBackend::setAoSamples(int samples)
   resetAccumulation();
 }
 
+// Sets per-pixel sampling for the current rendering mode.
 void OsprayBackend::setPixelSamples(int samples)
 {
   if (frameInFlight_) {
@@ -684,6 +720,7 @@ void OsprayBackend::setPixelSamples(int samples)
   resetAccumulation();
 }
 
+// Chooses between automatic and manual render-quality management.
 void OsprayBackend::setSettingsMode(SettingsMode mode)
 {
   if (settingsMode_ == mode)
@@ -692,11 +729,13 @@ void OsprayBackend::setSettingsMode(SettingsMode mode)
   resetAccumulation();
 }
 
+// Returns the current render-quality control mode.
 OsprayBackend::SettingsMode OsprayBackend::settingsMode() const
 {
   return settingsMode_;
 }
 
+// Selects the automatic preset used for dynamic render quality.
 void OsprayBackend::setAutomaticPreset(AutomaticPreset preset)
 {
   if (automaticPreset_ == preset)
@@ -705,11 +744,13 @@ void OsprayBackend::setAutomaticPreset(AutomaticPreset preset)
   resetAccumulation();
 }
 
+// Returns the selected automatic quality preset.
 OsprayBackend::AutomaticPreset OsprayBackend::automaticPreset() const
 {
   return automaticPreset_;
 }
 
+// Sets the frame-time target used by automatic quality control.
 void OsprayBackend::setAutomaticTargetFrameTimeMs(float ms)
 {
   const float clamped = std::clamp(ms, 2.0f, 1000.0f);
@@ -719,11 +760,13 @@ void OsprayBackend::setAutomaticTargetFrameTimeMs(float ms)
   resetAccumulation();
 }
 
+// Returns the automatic frame-time target.
 float OsprayBackend::automaticTargetFrameTimeMs() const
 {
   return automaticTargetFrameTimeMs_;
 }
 
+// Enables or disables accumulation in automatic mode.
 void OsprayBackend::setAutomaticAccumulationEnabled(bool enabled)
 {
   if (automaticAccumulationEnabled_ == enabled)
@@ -732,11 +775,13 @@ void OsprayBackend::setAutomaticAccumulationEnabled(bool enabled)
   resetAccumulation();
 }
 
+// Reports whether accumulation is enabled in automatic mode.
 bool OsprayBackend::automaticAccumulationEnabled() const
 {
   return automaticAccumulationEnabled_;
 }
 
+// Sets the initial progressive render scale for custom mode.
 void OsprayBackend::setCustomStartScale(int scale)
 {
   const int sanitized = sanitizeScale(scale);
@@ -746,11 +791,13 @@ void OsprayBackend::setCustomStartScale(int scale)
   resetAccumulation();
 }
 
+// Returns the custom mode starting render scale.
 int OsprayBackend::customStartScale() const
 {
   return customStartScale_;
 }
 
+// Sets the desired frame-time budget for custom mode.
 void OsprayBackend::setCustomTargetFrameTimeMs(float ms)
 {
   const float clamped = std::clamp(ms, 2.0f, 1000.0f);
@@ -760,21 +807,25 @@ void OsprayBackend::setCustomTargetFrameTimeMs(float ms)
   resetAccumulation();
 }
 
+// Returns the custom mode frame-time target.
 float OsprayBackend::customTargetFrameTimeMs() const
 {
   return customTargetFrameTimeMs_;
 }
 
+// Returns the configured AO samples for custom mode.
 int OsprayBackend::customAoSamples() const
 {
   return customAoSamples_;
 }
 
+// Returns the configured pixel samples for custom mode.
 int OsprayBackend::customPixelSamples() const
 {
   return customPixelSamples_;
 }
 
+// Enables or disables accumulation in custom mode.
 void OsprayBackend::setCustomAccumulationEnabled(bool enabled)
 {
   if (customAccumulationEnabled_ == enabled)
@@ -783,11 +834,13 @@ void OsprayBackend::setCustomAccumulationEnabled(bool enabled)
   resetAccumulation();
 }
 
+// Reports whether accumulation is enabled in custom mode.
 bool OsprayBackend::customAccumulationEnabled() const
 {
   return customAccumulationEnabled_;
 }
 
+// Sets the accumulation frame cap used in custom mode.
 void OsprayBackend::setCustomMaxAccumulationFrames(int frames)
 {
   const int clamped = std::clamp(frames, 0, 1000000);
@@ -797,11 +850,13 @@ void OsprayBackend::setCustomMaxAccumulationFrames(int frames)
   resetAccumulation();
 }
 
+// Returns the accumulation frame cap used in custom mode.
 int OsprayBackend::customMaxAccumulationFrames() const
 {
   return customMaxAccumulationFrames_;
 }
 
+// Controls whether interaction temporarily drops quality in custom mode.
 void OsprayBackend::setCustomLowQualityWhileInteracting(bool enabled)
 {
   if (customLowQualityWhileInteracting_ == enabled)
@@ -810,11 +865,13 @@ void OsprayBackend::setCustomLowQualityWhileInteracting(bool enabled)
   resetAccumulation();
 }
 
+// Reports whether custom mode lowers quality while interacting.
 bool OsprayBackend::customLowQualityWhileInteracting() const
 {
   return customLowQualityWhileInteracting_;
 }
 
+// Controls whether accumulation is limited to full-resolution passes in custom mode.
 void OsprayBackend::setCustomFullResAccumulationOnly(bool enabled)
 {
   if (customFullResAccumulationOnly_ == enabled)
@@ -823,11 +880,13 @@ void OsprayBackend::setCustomFullResAccumulationOnly(bool enabled)
   resetAccumulation();
 }
 
+// Reports whether custom mode accumulates only at full resolution.
 bool OsprayBackend::customFullResAccumulationOnly() const
 {
   return customFullResAccumulationOnly_;
 }
 
+// Sets the render watchdog timeout used to preempt overly slow frames.
 void OsprayBackend::setCustomWatchdogTimeoutMs(int ms)
 {
   const int clamped = std::clamp(ms, 10, 60000);
@@ -837,11 +896,13 @@ void OsprayBackend::setCustomWatchdogTimeoutMs(int ms)
   resetAccumulation();
 }
 
+// Returns the render watchdog timeout used in custom mode.
 int OsprayBackend::customWatchdogTimeoutMs() const
 {
   return customWatchdogTimeoutMs_;
 }
 
+// Updates the backend's notion of whether the user is actively interacting.
 void OsprayBackend::setInteracting(bool interacting)
 {
   if (isInteracting_ == interacting)
@@ -851,21 +912,25 @@ void OsprayBackend::setInteracting(bool interacting)
   resetAccumulation();
 }
 
+// Returns the currently active progressive render scale.
 int OsprayBackend::currentScale() const
 {
   return passScale_;
 }
 
+// Reports whether automatic quality adaptation is currently active.
 bool OsprayBackend::dynamicModeActive() const
 {
   return dynamicModeActive_;
 }
 
+// Reports whether AO backoff was applied to recover interactivity.
 bool OsprayBackend::backoffApplied() const
 {
   return backoffApplied_;
 }
 
+// Pushes the current AO/pixel sample settings into the OSPRay renderer object.
 void OsprayBackend::applyRendererSamplingParams(int aoSamples, int pixelSamples)
 {
   const int clampedAo = std::clamp(aoSamples, 0, kMaxSafeAoSamples);
@@ -880,6 +945,7 @@ void OsprayBackend::applyRendererSamplingParams(int aoSamples, int pixelSamples)
   appliedPixelSamples_ = clampedPixel;
 }
 
+// Clamps a requested render scale to the supported progressive scale ladder.
 int OsprayBackend::sanitizeScale(int scale) const
 {
   int bestScale = kProgressiveScales.front();
@@ -894,6 +960,7 @@ int OsprayBackend::sanitizeScale(int scale) const
   return bestScale;
 }
 
+// Converts a scale value into its corresponding progressive ladder index.
 int OsprayBackend::scaleToIndex(int scale) const
 {
   const int sanitized = sanitizeScale(scale);
@@ -904,6 +971,7 @@ int OsprayBackend::scaleToIndex(int scale) const
   return int(kProgressiveScales.size()) - 1;
 }
 
+// Returns the initial progressive scale for the current quality mode.
 int OsprayBackend::startScaleForCurrentMode() const
 {
   if (settingsMode_ == SettingsMode::Custom)
@@ -920,29 +988,34 @@ int OsprayBackend::startScaleForCurrentMode() const
   return 8;
 }
 
+// Returns the target frame time for the current quality mode.
 float OsprayBackend::targetFrameTimeForCurrentMode() const
 {
   return (settingsMode_ == SettingsMode::Custom) ? customTargetFrameTimeMs_
                                                  : automaticTargetFrameTimeMs_;
 }
 
+// Reports whether accumulation is enabled in the active quality mode.
 bool OsprayBackend::accumulationEnabledForCurrentMode() const
 {
   return (settingsMode_ == SettingsMode::Custom) ? customAccumulationEnabled_
                                                  : automaticAccumulationEnabled_;
 }
 
+// Returns the maximum accumulation frame count for the active quality mode.
 int OsprayBackend::maxAccumulationFramesForCurrentMode() const
 {
   return (settingsMode_ == SettingsMode::Custom) ? customMaxAccumulationFrames_ : 0;
 }
 
+// Returns the watchdog timeout for the active quality mode.
 int OsprayBackend::watchdogTimeoutForCurrentMode() const
 {
   return (settingsMode_ == SettingsMode::Custom) ? customWatchdogTimeoutMs_
                                                  : kDefaultWatchdogMs;
 }
 
+// Returns the AO sample count currently requested by the active quality mode.
 int OsprayBackend::configuredAoSamplesForCurrentMode() const
 {
   if (settingsMode_ == SettingsMode::Custom)
@@ -959,6 +1032,7 @@ int OsprayBackend::configuredAoSamplesForCurrentMode() const
   return 1;
 }
 
+// Returns the pixel sample count currently requested by the active quality mode.
 int OsprayBackend::configuredPixelSamplesForCurrentMode() const
 {
   if (settingsMode_ == SettingsMode::Custom)
@@ -975,12 +1049,14 @@ int OsprayBackend::configuredPixelSamplesForCurrentMode() const
   return 1;
 }
 
+// Reports whether only full-resolution passes may accumulate in the active mode.
 bool OsprayBackend::fullResAccumulationOnlyForCurrentMode() const
 {
   return (settingsMode_ == SettingsMode::Custom) ? customFullResAccumulationOnly_
                                                  : true;
 }
 
+// Reports whether the active mode should drop quality during interaction.
 bool OsprayBackend::lowQualityWhileInteractingForCurrentMode() const
 {
   return (settingsMode_ == SettingsMode::Custom)
@@ -988,6 +1064,7 @@ bool OsprayBackend::lowQualityWhileInteractingForCurrentMode() const
       : true;
 }
 
+// Cancels the currently running frame future and records why it was interrupted.
 void OsprayBackend::cancelInFlightFrame(const char *reason)
 {
   if (frameInFlight_) {
@@ -1003,6 +1080,7 @@ void OsprayBackend::cancelInFlightFrame(const char *reason)
   activeRenderRequest_.reset();
 }
 
+// Chooses the next render request type based on interaction and progressive state.
 OsprayBackend::RenderRequestType OsprayBackend::currentRenderRequestType() const
 {
   if (isInteracting_)
@@ -1024,6 +1102,7 @@ const char *OsprayBackend::renderRequestTypeName(RenderRequestType type) const
   return "unknown";
 }
 
+// Emits a diagnostic log line for render request scheduling and completion.
 void OsprayBackend::logRenderRequest(const char *event,
     const RenderRequest &request,
     const char *reason) const
@@ -1040,6 +1119,7 @@ void OsprayBackend::logRenderRequest(const char *event,
       reason ? reason : "");
 }
 
+// Stores the latest requested render work, replacing any older pending request.
 void OsprayBackend::enqueueLatestRenderRequest(const char *reason)
 {
   RenderRequest request;
@@ -1051,6 +1131,7 @@ void OsprayBackend::enqueueLatestRenderRequest(const char *reason)
   logRenderRequest("request", request, reason);
 }
 
+// Sets the current progressive scale and updates derived pass dimensions.
 void OsprayBackend::setProgressiveScale(int scale)
 {
   renderPhase_ = RenderPhase::Progressive;
@@ -1070,12 +1151,14 @@ void OsprayBackend::setProgressiveScale(int scale)
   }
 }
 
+// Rebuilds the default light list for the current world and renderer.
 void OsprayBackend::applyDefaultLights()
 {
   world_.setParam("light",
       ospray::cpp::CopiedData(makeDefaultLights(currentRenderer_)));
 }
 
+// Applies renderer-specific defaults such as AO and sampling parameters.
 void OsprayBackend::applyRendererDefaults()
 {
   renderer_.setParam("backgroundColor", 1.0f);
@@ -1095,6 +1178,7 @@ void OsprayBackend::applyRendererDefaults()
   renderer_.commit();
 }
 
+// Assigns a fallback material to geometry that does not provide one.
 void OsprayBackend::applyDefaultMaterial(ospray::cpp::GeometricModel &model)
 {
   ospray::cpp::Material material("obj");
@@ -1103,11 +1187,13 @@ void OsprayBackend::applyDefaultMaterial(ospray::cpp::GeometricModel &model)
   model.setParam("material", material);
 }
 
+// Commits the current instance list to the OSPRay world object.
 void OsprayBackend::applyWorldInstances()
 {
   world_.setParam("instance", ospray::cpp::CopiedData(sceneInstances_));
 }
 
+// Resets progressive counters, framebuffers, and optionally the display image.
 void OsprayBackend::resetProgressiveState(bool clearDisplay)
 {
   setProgressiveScale(startScaleForCurrentMode());
@@ -1125,12 +1211,14 @@ void OsprayBackend::resetProgressiveState(bool clearDisplay)
     accumFb_.resetAccumulation();
 }
 
+// Updates the camera crop window for tiled/progressive rendering passes.
 void OsprayBackend::updateCameraCrop(const vec2f &imageStart, const vec2f &imageEnd)
 {
   camera_.setParam("imageStart", imageStart);
   camera_.setParam("imageEnd", imageEnd);
 }
 
+// Advances the progressive state machine to the next scale or accumulation phase.
 void OsprayBackend::beginNextProgressivePass()
 {
   const int lastIndex = int(kProgressiveScales.size()) - 1;
@@ -1153,12 +1241,14 @@ void OsprayBackend::beginNextProgressivePass()
   }
 }
 
+// Allocates the per-pass framebuffer used for the current progressive scale.
 void OsprayBackend::prepareTileFrameBuffer(int tileW, int tileH)
 {
   if (!passFb_.handle() || tileW != passW_ || tileH != passH_)
     passFb_ = ospray::cpp::FrameBuffer(tileW, tileH, OSP_FB_SRGBA, OSP_FB_COLOR);
 }
 
+// Starts the next asynchronous OSPRay frame render based on pending state.
 bool OsprayBackend::startNextRenderWork()
 {
   RenderRequest request = pendingRenderRequest_.value_or(RenderRequest{
@@ -1194,6 +1284,7 @@ bool OsprayBackend::startNextRenderWork()
   return true;
 }
 
+// Finalizes a completed frame, copies pixels, and updates quality heuristics.
 bool OsprayBackend::finishCompletedRender()
 {
   if (!frameInFlight_ || !currentFrame_.handle())
@@ -1243,6 +1334,7 @@ bool OsprayBackend::finishCompletedRender()
   return updatedImage;
 }
 
+// Applies queued camera, resize, renderer, and reset changes between frames.
 void OsprayBackend::applyPendingState()
 {
   if (frameInFlight_)
@@ -1292,6 +1384,7 @@ void OsprayBackend::applyPendingState()
   }
 }
 
+// Upsamples the latest progressive pass into the display-sized pixel buffer.
 void OsprayBackend::upsamplePassToDisplay()
 {
   if (passPixels_.empty() || displayPixels_.empty())
@@ -1307,6 +1400,7 @@ void OsprayBackend::upsamplePassToDisplay()
   }
 }
 
+// Reduces AO cost after repeated slow frames or watchdog-triggered stalls.
 void OsprayBackend::applyAoBackoff(bool forcedByWatchdog)
 {
   const int configuredAo = configuredAoSamplesForCurrentMode();
@@ -1343,31 +1437,37 @@ int& OsprayBackend::getAoSamples()
   return customAoSamples_;
 }
 
+// Returns the last backend error string.
 const std::string &OsprayBackend::lastError() const
 {
   return lastError_;
 }
 
+// Stores the latest backend error string.
 void OsprayBackend::setError(std::string message)
 {
   lastError_ = std::move(message);
 }
 
+// Returns the number of accumulated frames produced for the current view.
 uint64_t OsprayBackend::accumulatedFrames() const
 {
   return accumulatedFrames_;
 }
 
+// Returns how many frames were cancelled by the render watchdog.
 uint64_t OsprayBackend::watchdogCancelCount() const
 {
   return watchdogCancelCount_;
 }
 
+// Returns how many times AO quality was reduced automatically.
 uint64_t OsprayBackend::aoAutoReductionCount() const
 {
   return aoAutoReductionCount_;
 }
 
+// Enumerates selectable BRL-CAD object names from a database file.
 std::vector<std::string> OsprayBackend::listBrlcadObjects(
     const std::string &path) const
 {
@@ -1397,6 +1497,7 @@ std::vector<std::string> OsprayBackend::listBrlcadObjects(
   return names;
 }
 
+// Builds a BRL-CAD object hierarchy suitable for UI browsing.
 std::vector<OsprayBackend::BrlcadNode> OsprayBackend::listBrlcadHierarchy(
     const std::string &path) const
 {

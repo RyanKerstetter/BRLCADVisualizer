@@ -26,6 +26,8 @@
 #include <QLabel>
 
 namespace {
+// Prefer the common BRL-CAD aggregate names before falling back to the previous
+// user selection or the first discovered object.
 QString defaultBrlcadObject(const QStringList &objects, const QString &currentObject)
 {
   if (objects.contains(QStringLiteral("all.g")))
@@ -51,6 +53,8 @@ QString hierarchyNodeLabel(const OsprayBackend::BrlcadNode &node)
 
 std::vector<OsprayBackend::BrlcadNode> buildSafeHierarchyFromObjectList(const QStringList &objects)
 {
+  // Some databases only expose a flat object list. This synthesizes a minimal
+  // hierarchy so the picker still presents a navigable tree.
   std::vector<OsprayBackend::BrlcadNode> roots;
 
   OsprayBackend::BrlcadNode root;
@@ -121,6 +125,7 @@ std::vector<OsprayBackend::BrlcadNode> buildSafeHierarchyFromObjectList(const QS
   return roots;
 }
 
+// Recursively populates a Qt tree item hierarchy from BRL-CAD node data.
 void populateHierarchyItem(QTreeWidgetItem *parent,
     const OsprayBackend::BrlcadNode &node,
     const QString &currentObject,
@@ -138,10 +143,13 @@ void populateHierarchyItem(QTreeWidgetItem *parent,
     populateHierarchyItem(item, child, currentObject, selectedItem);
 }
 
+// Presents a filterable hierarchy dialog and returns the selected BRL-CAD object.
 QString chooseBrlcadObjectHierarchy(QWidget *parent,
     const std::vector<OsprayBackend::BrlcadNode> &roots,
     const QString &currentObject)
 {
+  // The BRL-CAD object chooser is intentionally tree-based so users can browse
+  // large databases and filter down to a single selectable top-level object.
   if (roots.empty())
     return QString();
 
@@ -236,8 +244,11 @@ QString chooseBrlcadObjectHierarchy(QWidget *parent,
 }
 } // namespace
 
+// Builds the main window, render widget, and worker wiring.
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
+  // The window coordinates the viewport and the optional worker process, but
+  // all rendering state lives in RenderWidget / OsprayBackend.
   renderWidget_ = new RenderWidget(this);
   renderWorkerClient_ = new RenderWorkerClient(this);
   renderWidget_->setRenderWorkerClient(renderWorkerClient_);
@@ -268,6 +279,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
         }
 
         statusBar()->showMessage(QStringLiteral("Render worker disconnected. Restarting..."));
+        // If the worker dies, try to restore the previous viewport state after
+        // reconnecting so the user does not have to manually recover.
         QTimer::singleShot(500, this, [this]() {
           if (renderWorkerClient_->isConnected())
             return;
@@ -295,8 +308,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
   QTimer::singleShot(0, this, [this]() { loadStartupDemo(); });
 }
 
+// Creates the top-level menus and connects them to viewport actions.
 void MainWindow::setupMenus()
 {
+  // Menu actions are thin UI wrappers that delegate actual scene/camera work to
+  // RenderWidget.
   QMenu *fileMenu = menuBar()->addMenu("&File");
 
   QAction *openAction = new QAction("&Open Model...", this);
@@ -431,6 +447,7 @@ void MainWindow::setupMenus()
   });
 }
 
+// Populates the demo-model submenu with any deployed sample databases.
 void MainWindow::populateDemoModelsMenu(QMenu *menu)
 {
   if (!menu)
@@ -450,6 +467,7 @@ void MainWindow::populateDemoModelsMenu(QMenu *menu)
 
   bool addedAny = false;
   for (const DemoModel &model : models) {
+    // Only advertise demo assets that are actually deployed with the build.
     const QString path = QDir(dbDir).filePath(QString::fromLatin1(model.fileName));
     if (!QFileInfo::exists(path))
       continue;
@@ -469,6 +487,7 @@ void MainWindow::populateDemoModelsMenu(QMenu *menu)
   }
 }
 
+// Returns the preferred startup demo database path if one is available.
 QString MainWindow::defaultDemoPath() const
 {
   const QString dbDir = demoModelsDir();
@@ -478,6 +497,7 @@ QString MainWindow::defaultDemoPath() const
   return QString();
 }
 
+// Locates the directory that contains shipped or installed BRL-CAD demo databases.
 QString MainWindow::demoModelsDir() const
 {
   const QString localDir =
@@ -492,8 +512,11 @@ QString MainWindow::demoModelsDir() const
 #endif
 }
 
+// Loads a default demo scene after startup when no other scene is active.
 void MainWindow::loadStartupDemo()
 {
+  // Start with a known-good BRL-CAD database when one is available so the app
+  // opens with visible content instead of an empty viewport.
   if (!renderWidget_ || renderWidget_->hasBrlcadScene()
       || !renderWidget_->currentBrlcadPath().isEmpty())
     return;
@@ -509,12 +532,14 @@ void MainWindow::loadStartupDemo()
   }
 }
 
+// Enables or disables BRL-CAD-specific menu actions based on the current scene type.
 void MainWindow::updateBrlcadMenuState()
 {
   if (selectBrlcadObjectAction_)
     selectBrlcadObjectAction_->setEnabled(renderWidget_->hasBrlcadScene());
 }
 
+// Prompts for a BRL-CAD object and asks the render widget to load it.
 void MainWindow::chooseAndLoadBrlcadObject(
     const QString &path, const QStringList &objects)
 {
@@ -530,6 +555,8 @@ void MainWindow::chooseAndLoadBrlcadObject(
   }
 
   const auto hierarchy = buildSafeHierarchyFromObjectList(choices);
+  // Preserve the currently selected object when possible so re-opening the
+  // picker behaves like a refinement step instead of a full reset.
   QString obj = chooseBrlcadObjectHierarchy(this, hierarchy, renderWidget_->currentBrlcadObject());
   if (obj.isEmpty())
     obj = defaultBrlcadObject(choices, renderWidget_->currentBrlcadObject());

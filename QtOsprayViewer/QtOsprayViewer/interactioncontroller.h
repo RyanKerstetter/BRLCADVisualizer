@@ -5,6 +5,8 @@
 class InteractionController
 {
  public:
+  // These actions describe intent only. RenderWidget decides how that intent is
+  // applied to either the camera or the currently selected object.
   enum class Action
   {
     None,
@@ -27,5 +29,6 @@ class InteractionController
     AxisConstraint axis = AxisConstraint::Free;
   };
 
+  // Map the current mouse-button/modifier chord to a high-level manipulation.
   static Result classify(Qt::MouseButtons buttons, Qt::KeyboardModifiers mods);
 };

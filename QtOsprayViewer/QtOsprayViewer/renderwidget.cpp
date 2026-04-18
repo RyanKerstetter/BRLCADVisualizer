@@ -15,10 +15,13 @@
 
 using rkcommon::math::vec3f;
 
+// Initializes widget state, timers, and input tracking for progressive rendering.
 RenderWidget::RenderWidget(QWidget *parent) : QOpenGLWidget(parent)
 {
   setFocusPolicy(Qt::StrongFocus);
 
+  // The widget drives progressive rendering with a lightweight UI timer rather
+  // than blocking inside paintGL().
   renderTimer_ = new QTimer(this);
   connect(renderTimer_, &QTimer::timeout, this, &RenderWidget::advanceRender);
   renderTimer_->start(16); // progressive render at ~60 Hz
@@ -34,6 +37,7 @@ RenderWidget::RenderWidget(QWidget *parent) : QOpenGLWidget(parent)
   setFocusPolicy(Qt::StrongFocus);
 }
 
+// Shuts down background loading and destroys the ImGui/OpenGL state owned by the widget.
 RenderWidget::~RenderWidget()
 {
   if (sceneLoadThread_.joinable())
@@ -45,6 +49,7 @@ RenderWidget::~RenderWidget()
   doneCurrent();
 }
 
+// Applies a classified interaction gesture to the camera/view state.
 void RenderWidget::applyViewAction(
     const InteractionController::Result &result, const QPoint &delta)
 {
@@ -60,6 +65,8 @@ void RenderWidget::applyViewAction(
   const int verticalDelta = -delta.y();
 
   if (result.action == Action::Translate) {
+    // Free translation pans in camera space; constrained translation moves along
+    // world axes so placement stays predictable.
     float sx = float(delta.x()) * panSpeed_ * dist_;
     float sy = float(verticalDelta) * panSpeed_ * dist_;
 
@@ -84,6 +91,8 @@ void RenderWidget::applyViewAction(
   }
 
   else if (result.action == Action::Rotate) {
+    // Free rotation is orbit camera motion. Axis-constrained rotation spins the
+    // eye position around a fixed world axis.
     float dx = delta.x() * orbitSpeed_;
     float dy = verticalDelta * orbitSpeed_;
 
@@ -120,6 +129,7 @@ void RenderWidget::applyViewAction(
   }
 
   else if (result.action == Action::Scale) {
+    // Scale maps to dolly distance for the view target.
     float amount = float(verticalDelta) * 0.01f;
 
     float maxExtent = sceneBoundsMaxExtent();
@@ -138,6 +148,7 @@ void RenderWidget::applyViewAction(
   renderOnce();
 }
 
+// Computes a camera distance that frames the scene bounds at the current field of view.
 float RenderWidget::fitDistanceFromBounds(float maxExtent, float fovyDeg)
 {
   if (maxExtent < 0.001f)
@@ -149,6 +160,7 @@ float RenderWidget::fitDistanceFromBounds(float maxExtent, float fovyDeg)
   return (0.5f * maxExtent) / std::tan(halfAngle) * 1.3f;
 }
 
+// Copies the current orbit camera pose into the fly-camera representation.
 void RenderWidget::syncFlyFromOrbit()
 {
   const vec3f eye = currentCameraPosition();
@@ -157,6 +169,7 @@ void RenderWidget::syncFlyFromOrbit()
   anglesFromForward(forward, flyYaw_, flyPitch_);
 }
 
+// Reconstructs orbit camera state from the current fly-camera pose.
 void RenderWidget::syncOrbitFromFly()
 {
   vec3f eye = flyPos_;
@@ -220,6 +233,7 @@ vec3f RenderWidget::currentCameraUp() const
   return normalizeVec(worldUp());
 }
 
+// Projects a world-space point into widget pixel coordinates for overlay drawing.
 bool RenderWidget::projectWorldToScreen(const vec3f &worldPos, QPointF &screenPos) const
 {
   const vec3f eye = currentCameraPosition();
@@ -250,6 +264,7 @@ bool RenderWidget::projectWorldToScreen(const vec3f &worldPos, QPointF &screenPo
   return true;
 }
 
+// Draws axis guides around the orbit pivot to show constrained rotation context.
 void RenderWidget::drawRotationAxisOverlay(QPainter &p)
 {
   if (inputMode_ != InputMode::Orbit)
@@ -296,6 +311,7 @@ void RenderWidget::drawRotationAxisOverlay(QPainter &p)
   }
 }
 
+// Clamps a scalar value to the requested numeric range.
 float RenderWidget::clampf(float v, float lo, float hi)
 {
   return std::max(lo, std::min(hi, v));
@@ -316,6 +332,7 @@ vec3f RenderWidget::crossVec(const vec3f &a, const vec3f &b)
       a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
 }
 
+// Sets up the OpenGL and ImGui state used by the widget.
 void RenderWidget::initializeGL()
 {
   initializeOpenGLFunctions();
@@ -333,6 +350,7 @@ void RenderWidget::initializeGL()
   ImGui_ImplOpenGL3_Init("#version 130");
 }
 
+// Resizes the render targets to match the widget dimensions.
 void RenderWidget::resizeGL(int w, int h)
 {
   if (sceneLoadInProgress_.load()) {
@@ -349,6 +367,7 @@ void RenderWidget::resizeGL(int w, int h)
   resetView();
 }
 
+// Pushes the current camera pose into either the worker or local backend.
 void RenderWidget::syncCameraToBackend()
 {
   if (inputMode_ == InputMode::Orbit) {
@@ -368,11 +387,13 @@ void RenderWidget::syncCameraToBackend()
   }
 }
 
+// Returns true when rendering is delegated to the external worker process.
 bool RenderWidget::usingWorkerRenderPath() const
 {
   return renderWorkerClient_ && renderWorkerClient_->isConnected();
 }
 
+// Clears accumulation state after any camera, renderer, or scene change.
 void RenderWidget::resetAccumulationTargets()
 {
   backend_.resetAccumulation();
@@ -380,6 +401,7 @@ void RenderWidget::resetAccumulationTargets()
     renderWorkerClient_->resetAccumulation();
 }
 
+// Marks the start of an interactive manipulation and lowers render quality if needed.
 void RenderWidget::beginInteraction()
 {
   if (!interactionActive_) {
@@ -390,6 +412,7 @@ void RenderWidget::beginInteraction()
   interactionDebounceTimer_->start(kInteractionDebounceMs);
 }
 
+// Defers the transition out of interaction mode to avoid flickering state changes.
 void RenderWidget::scheduleInteractionEnd()
 {
   if (!interactionActive_)
@@ -397,6 +420,7 @@ void RenderWidget::scheduleInteractionEnd()
   interactionDebounceTimer_->start(kInteractionDebounceMs);
 }
 
+// Ends interaction mode and restores normal progressive rendering behavior.
 void RenderWidget::finishInteraction()
 {
   if (!interactionActive_)
@@ -406,12 +430,14 @@ void RenderWidget::finishInteraction()
   backend_.setInteracting(false);
 }
 
+// Reports whether a key participates in fly-camera movement.
 bool RenderWidget::isMovementKey(int key) const
 {
   return key == Qt::Key_W || key == Qt::Key_A || key == Qt::Key_S
       || key == Qt::Key_D || key == Qt::Key_Q || key == Qt::Key_E;
 }
 
+// Updates pressed state for the fly-camera movement keys.
 void RenderWidget::setMovementKeyState(int key, bool pressed)
 {
   switch (key) {
@@ -438,6 +464,7 @@ void RenderWidget::setMovementKeyState(int key, bool pressed)
   }
 }
 
+// Returns true when any fly-navigation movement key is currently held.
 bool RenderWidget::anyMovementKeysDown() const
 {
   return moveForwardKeyDown_ || moveLeftKeyDown_ || moveBackwardKeyDown_
@@ -454,6 +481,7 @@ vec3f RenderWidget::sceneBoundsCenter() const
   return backend_.getBoundsCenter();
 }
 
+// Computes the maximum scene extent used for view framing and motion scaling.
 float RenderWidget::sceneBoundsMaxExtent() const
 {
   if (usingWorkerRenderPath()) {
@@ -465,12 +493,14 @@ float RenderWidget::sceneBoundsMaxExtent() const
   return backend_.getBoundsMaxExtent();
 }
 
+// Advances rendering by one step and updates the displayed image if a new frame is ready.
 void RenderWidget::renderOnce()
 {
   if (!backendReady_ || sceneLoadInProgress_.load())
     return;
 
   if (usingWorkerRenderPath()) {
+    // In worker mode the UI polls for the latest completed frame over IPC.
     const auto frame = renderWorkerClient_->requestFrame();
     if (frame.image.isNull())
       return;
@@ -516,6 +546,7 @@ void RenderWidget::renderOnce()
   }
 }
 
+// Timer callback that keeps progressive rendering moving while the widget is visible.
 void RenderWidget::advanceRender()
 {
   if (!backendReady_ || !isVisible() || sceneLoadInProgress_.load())
@@ -524,6 +555,7 @@ void RenderWidget::advanceRender()
   renderOnce();
 }
 
+// Draws the latest rendered image and the ImGui control overlay.
 void RenderWidget::paintGL()
 {
   glViewport(0, 0, width() * devicePixelRatioF(), height() * devicePixelRatioF());
@@ -594,6 +626,8 @@ void RenderWidget::paintGL()
       ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
   if (sceneLoadInProgress_.load()) {
+    // While a background load runs, the overlay switches into a simple status
+    // panel and rendering remains paused on the last completed frame.
     ImGui::Separator();
     ImGui::Text("Status");
     ImGui::TextWrapped("%s", loadStatusText_.toStdString().c_str());
@@ -635,6 +669,7 @@ void RenderWidget::paintGL()
   ImGui::Separator();
   ImGui::Text("Renderer");
 
+  // Keep the UI selection in sync with whichever render path is active.
   int rendererMode = 0;
   const std::string rendererName =
       usingWorkerRenderPath() ? currentRenderer_.toStdString() : backend_.currentRenderer();
@@ -987,6 +1022,7 @@ void RenderWidget::paintGL()
   ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
+// Starts an asynchronous OBJ scene load and updates widget state on completion.
 bool RenderWidget::loadModel(const QString &path)
 {
   if (sceneLoadInProgress_.load()) {
@@ -997,6 +1033,8 @@ bool RenderWidget::loadModel(const QString &path)
   startAsyncLoad(
       [this, path]() {
         if (usingWorkerRenderPath()) {
+          // Worker mode does scene IO and OSPRay object creation out of process,
+          // then ships back bounds and status for UI-side camera reset.
           const auto result = renderWorkerClient_->loadObj(path);
           QMetaObject::invokeMethod(this, [this, result, path]() {
             sceneLoadInProgress_.store(false);
@@ -1045,6 +1083,7 @@ bool RenderWidget::loadModel(const QString &path)
   return true;
 }
 
+// Starts an asynchronous BRL-CAD scene load for the selected top-level object.
 bool RenderWidget::loadBrlcadModel(const QString &path, const QString &topObject)
 {
   if (sceneLoadInProgress_.load()) {
@@ -1060,6 +1099,8 @@ bool RenderWidget::loadBrlcadModel(const QString &path, const QString &topObject
   startAsyncLoad(
       [this, path, resolvedObject, availableObjects]() {
         if (usingWorkerRenderPath()) {
+          // BRL-CAD scene loading can be expensive, so it follows the same async
+          // worker flow as OBJ loading when the worker is available.
           const auto result = renderWorkerClient_->loadBrlcad(path, resolvedObject);
           QMetaObject::invokeMethod(this,
               [this, result, path, resolvedObject, availableObjects]() {
@@ -1113,6 +1154,7 @@ bool RenderWidget::loadBrlcadModel(const QString &path, const QString &topObject
   return true;
 }
 
+// Queries the available BRL-CAD object names from the active render path.
 QStringList RenderWidget::listBrlcadObjects(const QString &path) const
 {
   if (renderWorkerClient_ && renderWorkerClient_->isConnected())
@@ -1128,6 +1170,7 @@ QStringList RenderWidget::listBrlcadObjects(const QString &path) const
   return out;
 }
 
+// Reloads the current BRL-CAD database with a different selected top-level object.
 bool RenderWidget::reloadBrlcadObject(const QString &topObject)
 {
   if (currentBrlcadPath_.isEmpty())
@@ -1135,16 +1178,20 @@ bool RenderWidget::reloadBrlcadObject(const QString &topObject)
   return loadBrlcadModel(currentBrlcadPath_, topObject);
 }
 
+// Returns the most recent scene-load or worker error message.
 QString RenderWidget::lastError() const
 {
   return lastError_;
 }
 
+// Resets the camera to a default view that frames the current scene bounds.
 void RenderWidget::resetView()
 {
   if (sceneLoadInProgress_.load())
     return;
 
+  // Reframe around the current scene bounds and rebuild both orbit and fly
+  // camera state from the same canonical view.
   center_ = sceneBoundsCenter();
 
   float maxExtent = sceneBoundsMaxExtent();
@@ -1163,6 +1210,7 @@ void RenderWidget::resetView()
   update();
 }
 
+// Switches between orbit and fly navigation while preserving the visible view.
 void RenderWidget::setInputMode(InputMode mode)
 {
   if (sceneLoadInProgress_.load()) {
@@ -1176,6 +1224,7 @@ void RenderWidget::setInputMode(InputMode mode)
     return;
 
   if (mode == InputMode::Fly && inputMode_ == InputMode::Orbit) {
+    // Preserve the current view when switching navigation paradigms.
     syncFlyFromOrbit();
   } else if (mode == InputMode::Orbit && inputMode_ == InputMode::Fly) {
     syncOrbitFromFly();
@@ -1190,6 +1239,7 @@ void RenderWidget::setInputMode(InputMode mode)
   update();
 }
 
+// Starts tracking a mouse interaction and forwards button state to ImGui.
 void RenderWidget::mousePressEvent(QMouseEvent *e)
 {
   if (e->button() == Qt::LeftButton)
@@ -1205,7 +1255,8 @@ void RenderWidget::mousePressEvent(QMouseEvent *e)
   if (sceneLoadInProgress_.load())
     return;
 
-  // let camera only react if ImGui doesn't want mouse
+  // Let camera/object interaction happen only when the ImGui overlay is not
+  // actively consuming the mouse event.
   if (ImGui::GetIO().WantCaptureMouse)
     return;
 
@@ -1213,6 +1264,7 @@ void RenderWidget::mousePressEvent(QMouseEvent *e)
   lastMouse_ = e->pos();
 }
 
+// Ends or tapers off a mouse interaction and forwards button state to ImGui.
 void RenderWidget::mouseReleaseEvent(QMouseEvent *e)
 {
   if (e->button() == Qt::LeftButton)
@@ -1233,6 +1285,7 @@ void RenderWidget::mouseReleaseEvent(QMouseEvent *e)
   update();
 }
 
+// Updates ImGui hover state and applies camera/object dragging when appropriate.
 void RenderWidget::mouseMoveEvent(QMouseEvent *e)
 {
   imguiMousePos_ = e->position();
@@ -1304,6 +1357,7 @@ void RenderWidget::mouseMoveEvent(QMouseEvent *e)
   }
 }
 
+// Applies zoom/dolly input from the mouse wheel.
 void RenderWidget::wheelEvent(QWheelEvent *e)
 {
   imguiMouseWheel_ += e->angleDelta().y() / 120.0f;
@@ -1341,6 +1395,7 @@ void RenderWidget::wheelEvent(QWheelEvent *e)
   scheduleInteractionEnd();
 }
 
+// Handles keyboard shortcuts, fly-camera movement, and overlay toggles.
 void RenderWidget::keyPressEvent(QKeyEvent *e)
 {
   ImGuiIO &io = ImGui::GetIO();
@@ -1441,6 +1496,7 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
   renderOnce();
 }
 
+// Clears key state when navigation keys are released.
 void RenderWidget::keyReleaseEvent(QKeyEvent *e)
 {
   ImGuiIO &io = ImGui::GetIO();
@@ -1486,6 +1542,7 @@ void RenderWidget::keyReleaseEvent(QKeyEvent *e)
     scheduleInteractionEnd();
 }
 
+// Notifies ImGui that the widget has gained focus.
 void RenderWidget::focusInEvent(QFocusEvent *e)
 {
   Q_UNUSED(e);
@@ -1493,6 +1550,7 @@ void RenderWidget::focusInEvent(QFocusEvent *e)
   update();
 }
 
+// Notifies ImGui that the widget has lost focus and ends active movement.
 void RenderWidget::focusOutEvent(QFocusEvent *e)
 {
   Q_UNUSED(e);
@@ -1510,6 +1568,7 @@ void RenderWidget::focusOutEvent(QFocusEvent *e)
   update();
 }
 
+// Changes the world up-axis convention and realigns the current camera.
 void RenderWidget::setUpAxis(UpAxis axis)
 {
   if (sceneLoadInProgress_.load()) {
@@ -1525,36 +1584,43 @@ void RenderWidget::setUpAxis(UpAxis axis)
   resetView();
 }
 
+// Returns the currently selected world up-axis convention.
 RenderWidget::UpAxis RenderWidget::upAxis() const
 {
   return upAxis_;
 }
 
+// Returns the path of the currently loaded BRL-CAD database, if any.
 QString RenderWidget::currentBrlcadPath() const
 {
   return currentBrlcadPath_;
 }
 
+// Returns the currently selected BRL-CAD top-level object name.
 QString RenderWidget::currentBrlcadObject() const
 {
   return currentBrlcadObject_;
 }
 
+// Returns the cached list of selectable BRL-CAD objects for the current scene.
 QStringList RenderWidget::currentBrlcadObjects() const
 {
   return currentBrlcadObjects_;
 }
 
+// Reports whether the active scene came from a BRL-CAD database.
 bool RenderWidget::hasBrlcadScene() const
 {
   return !currentBrlcadPath_.isEmpty();
 }
 
+// Attaches the optional render worker client used for out-of-process rendering.
 void RenderWidget::setRenderWorkerClient(RenderWorkerClient *client)
 {
   renderWorkerClient_ = client;
 }
 
+// Re-sends current viewport state to a newly connected worker.
 void RenderWidget::replayWorkerState()
 {
   if (!usingWorkerRenderPath())
@@ -1585,9 +1651,12 @@ void RenderWidget::replayWorkerState()
   renderOnce();
 }
 
+// Runs a scene-loading task on a background thread and updates UI status text.
 void RenderWidget::startAsyncLoad(
     const std::function<void()> &loader, const QString &statusText)
 {
+  // Scene loading is pushed to a background thread so large OBJ / BRL-CAD
+  // databases do not stall input or repaint handling.
   if (sceneLoadThread_.joinable())
     sceneLoadThread_.join();
 
@@ -1626,6 +1695,7 @@ vec3f RenderWidget::forwardFromAngles(float yaw, float pitch) const
   return normalizeVec(dir);
 }
 
+// Converts a forward direction vector into yaw/pitch angles for fly mode.
 void RenderWidget::anglesFromForward(const vec3f &forward, float &yaw, float &pitch) const
 {
   const vec3f dir = normalizeVec(forward);
@@ -1667,6 +1737,7 @@ vec3f RenderWidget::orbitEyeDirection() const
           + up.z * cosPhi));
 }
 
+// Updates orbit angles and distance so the camera eye lands at the requested position.
 void RenderWidget::setOrbitFromEyePosition(const vec3f &eye)
 {
   vec3f offset(
@@ -1708,6 +1779,7 @@ vec3f RenderWidget::orbitRight() const
   return right;
 }
 
+// Nudges orbit angles away from singularities to keep a stable up direction.
 void RenderWidget::alignOrbitUpToReference()
 {
   setOrbitFromEyePosition(currentCameraPosition());
@@ -1726,6 +1798,7 @@ vec3f RenderWidget::rotateAroundAxis(const vec3f &v, const vec3f &axis, float an
       v.z * c + cross.z * s + n.z * dot * (1.f - c));
 }
 
+// Applies free orbit rotation deltas and keeps the camera in a valid range.
 void RenderWidget::rotateOrbit(float yawDelta, float pitchDelta)
 {
   orbitTheta_ += yawDelta;
@@ -1733,6 +1806,7 @@ void RenderWidget::rotateOrbit(float yawDelta, float pitchDelta)
   syncFlyFromOrbit();
 }
 
+// Returns the current fly movement step, including any temporary speed changes.
 float RenderWidget::flyMoveStep() const
 {
   if (flyMoveStep_ > 0.0f)
@@ -1741,6 +1815,7 @@ float RenderWidget::flyMoveStep() const
   return defaultFlyMoveStep();
 }
 
+// Computes a baseline fly movement step from the current scene size.
 float RenderWidget::defaultFlyMoveStep() const
 {
   float modelScale = sceneBoundsMaxExtent();
@@ -1750,6 +1825,7 @@ float RenderWidget::defaultFlyMoveStep() const
   return modelScale * 0.005f;
 }
 
+// Resets the fly-camera movement speed to its scene-scaled default.
 void RenderWidget::resetFlySpeed()
 {
   flyMoveStep_ = defaultFlyMoveStep();

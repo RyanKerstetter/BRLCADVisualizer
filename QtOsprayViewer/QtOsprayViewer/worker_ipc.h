@@ -9,6 +9,7 @@
 
 namespace ibrt::ipc {
 
+// Message types are shared by the viewer process and the render worker.
 enum class MessageType : uint32_t
 {
   Ping = 1,
@@ -45,6 +46,8 @@ struct Message
   std::string payload;
 };
 
+// The pipe name is keyed by the UI process ID so a viewer instance talks only
+// to its own worker.
 std::string makePipeName(uint32_t processId);
 
 #ifdef _WIN32

@@ -5,6 +5,8 @@ InteractionController::Result InteractionController::classify(
 {
   Result r{};
 
+  // Gesture decoding is centralized here so the event handlers only need to ask
+  // "what operation should happen?" instead of duplicating chord logic.
   const bool shift = mods & Qt::ShiftModifier;
   const bool ctrl = mods & Qt::ControlModifier;
   const bool alt = mods & Qt::AltModifier;

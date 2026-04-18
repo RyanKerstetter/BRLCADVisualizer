@@ -9,16 +9,19 @@
 #include <cstring>
 #include <string>
 
+// Creates the worker client and its owned child process object.
 RenderWorkerClient::RenderWorkerClient(QObject *parent) : QObject(parent)
 {
   process_ = new QProcess(this);
 }
 
+// Stops the worker process and closes any IPC resources on destruction.
 RenderWorkerClient::~RenderWorkerClient()
 {
   stop();
 }
 
+// Launches the render worker process and connects the named-pipe IPC channel.
 bool RenderWorkerClient::start(const QString &workerPath)
 {
 #ifndef _WIN32
@@ -29,6 +32,8 @@ bool RenderWorkerClient::start(const QString &workerPath)
   workerPath_ = workerPath;
   stop();
 
+  // The worker listens on a per-process named pipe that is established after
+  // the child process launches.
   pipeName_ =
       QString::fromStdString(ibrt::ipc::makePipeName(QCoreApplication::applicationPid()));
   process_->start(workerPath, {QStringLiteral("--pipe"), pipeName_});
@@ -53,6 +58,7 @@ bool RenderWorkerClient::start(const QString &workerPath)
 #endif
 }
 
+// Restarts the worker using the previously configured executable path.
 bool RenderWorkerClient::restart()
 {
   if (workerPath_.isEmpty()) {
@@ -62,9 +68,11 @@ bool RenderWorkerClient::restart()
   return start(workerPath_);
 }
 
+// Stops the worker process and tears down the pipe connection.
 void RenderWorkerClient::stop()
 {
 #ifdef _WIN32
+  // Best-effort graceful shutdown before tearing down the process handle.
   if (pipe_ != INVALID_HANDLE_VALUE) {
     ibrt::ipc::writeMessage(
         pipe_, {ibrt::ipc::MessageType::Shutdown, 0, std::string()});
@@ -81,6 +89,7 @@ void RenderWorkerClient::stop()
   emit workerConnectionChanged(false);
 }
 
+// Reports whether the named-pipe connection to the worker is alive.
 bool RenderWorkerClient::isConnected() const
 {
 #ifdef _WIN32
@@ -90,11 +99,13 @@ bool RenderWorkerClient::isConnected() const
 #endif
 }
 
+// Returns the last worker-related error message.
 QString RenderWorkerClient::lastError() const
 {
   return lastError_;
 }
 
+// Requests the list of selectable BRL-CAD objects from the worker.
 QStringList RenderWorkerClient::listBrlcadObjects(const QString &path)
 {
 #ifndef _WIN32
@@ -115,6 +126,7 @@ QStringList RenderWorkerClient::listBrlcadObjects(const QString &path)
 #endif
 }
 
+// Requests that the worker load an OBJ scene and returns the decoded result.
 RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadObj(const QString &path)
 {
   SceneLoadResult result;
@@ -124,6 +136,8 @@ RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadObj(const QString &p
   lastError_ = result.errorMessage;
   return result;
 #else
+  // Scene load replies embed success, scene bounds, and an optional error in a
+  // single binary payload.
   std::string payload;
   if (!sendRequestBytes(
           static_cast<uint32_t>(ibrt::ipc::MessageType::LoadObj), path.toStdString(), &payload)) {
@@ -161,6 +175,7 @@ RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadObj(const QString &p
 #endif
 }
 
+// Requests that the worker load a BRL-CAD scene/object pair and returns the decoded result.
 RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadBrlcad(
     const QString &path, const QString &objectName)
 {
@@ -172,6 +187,7 @@ RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadBrlcad(
   lastError_ = result.errorMessage;
   return result;
 #else
+  // BRL-CAD load requests send path and object name as a newline-delimited pair.
   const std::string requestPayload =
       path.toStdString() + '\n' + objectName.toStdString();
   std::string payload;
@@ -211,6 +227,7 @@ RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadBrlcad(
 #endif
 }
 
+// Sends a resize request so the worker rebuilds its render targets.
 bool RenderWorkerClient::resize(int width, int height)
 {
 #ifndef _WIN32
@@ -228,6 +245,7 @@ bool RenderWorkerClient::resize(int width, int height)
 #endif
 }
 
+// Sends the current camera pose to the worker process.
 bool RenderWorkerClient::setCamera(const rkcommon::math::vec3f &eye,
     const rkcommon::math::vec3f &center,
     const rkcommon::math::vec3f &up,
@@ -259,6 +277,7 @@ bool RenderWorkerClient::setCamera(const rkcommon::math::vec3f &eye,
 #endif
 }
 
+// Tells the worker to reset progressive accumulation for the current view.
 bool RenderWorkerClient::resetAccumulation()
 {
 #ifndef _WIN32
@@ -271,6 +290,7 @@ bool RenderWorkerClient::resetAccumulation()
 #endif
 }
 
+// Switches the worker's active renderer type.
 bool RenderWorkerClient::setRenderer(const QString &rendererType)
 {
 #ifndef _WIN32
@@ -285,6 +305,7 @@ bool RenderWorkerClient::setRenderer(const QString &rendererType)
 #endif
 }
 
+// Sends dynamic-quality settings to the worker backend.
 bool RenderWorkerClient::setRenderSettings(const RenderSettingsState &settings)
 {
 #ifndef _WIN32
@@ -326,12 +347,15 @@ bool RenderWorkerClient::setRenderSettings(const RenderSettingsState &settings)
 #endif
 }
 
+// Requests the latest rendered frame from the worker and decodes the response.
 RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
 {
   FrameResult result;
 #ifndef _WIN32
   return result;
 #else
+  // Frame replies contain a small fixed header, raw RGBA pixels, then the
+  // renderer name used to produce the frame.
   std::string payload;
   if (!sendRequestBytes(static_cast<uint32_t>(ibrt::ipc::MessageType::RequestFrame),
           std::string(),
@@ -384,6 +408,7 @@ RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
 }
 
 #ifdef _WIN32
+// Repeatedly attempts to open the worker's named pipe until it becomes available.
 bool RenderWorkerClient::connectPipe()
 {
   for (int attempt = 0; attempt < 50; ++attempt) {
@@ -405,6 +430,7 @@ bool RenderWorkerClient::connectPipe()
   return false;
 }
 
+// Verifies that the worker is responsive before it is considered connected.
 bool RenderWorkerClient::sendPing()
 {
   if (pipe_ == INVALID_HANDLE_VALUE)
@@ -414,6 +440,7 @@ bool RenderWorkerClient::sendPing()
   return sendRequest(static_cast<uint32_t>(ibrt::ipc::MessageType::Ping), QString(), &responsePayload);
 }
 
+// Sends a text payload request and converts the binary response back to QString.
 bool RenderWorkerClient::sendRequest(
     uint32_t type, const QString &payload, QString *responsePayload)
 {
@@ -424,6 +451,7 @@ bool RenderWorkerClient::sendRequest(
   return ok;
 }
 
+// Sends one IPC request, waits for the matching response, and validates the message type.
 bool RenderWorkerClient::sendRequestBytes(
     uint32_t type, const std::string &payload, std::string *responsePayload)
 {
@@ -434,6 +462,8 @@ bool RenderWorkerClient::sendRequestBytes(
   }
 
   const uint64_t requestId = nextRequestId_++;
+  // The protocol is synchronous: one request goes out, exactly one response
+  // with the same request ID must come back.
   const ibrt::ipc::Message request{static_cast<ibrt::ipc::MessageType>(type),
       requestId,
       payload};
@@ -504,6 +534,7 @@ bool RenderWorkerClient::sendRequestBytes(
   return true;
 }
 
+// Closes the active named-pipe handle.
 void RenderWorkerClient::closePipe()
 {
   if (pipe_ != INVALID_HANDLE_VALUE) {

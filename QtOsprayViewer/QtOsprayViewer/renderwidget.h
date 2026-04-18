@@ -27,6 +27,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   Q_OBJECT
 
  public:
+  // Orbit keeps a pivot around the scene; Fly treats the camera as a free-moving observer.
   enum class InputMode
   {
     Orbit,
@@ -45,10 +46,12 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
     Z
   };
 
+  // Mouse gestures can act on the camera or on the loaded object transform.
   ManipulationTarget manipulationTarget_ = ManipulationTarget::View;
   explicit RenderWidget(QWidget *parent = nullptr);
   ~RenderWidget() override;
 
+  // Scene-loading and viewport control API used by MainWindow.
   bool loadModel(const QString &path);
   bool loadBrlcadModel(const QString &path, const QString &topObject = QString());
   QStringList listBrlcadObjects(const QString &path) const;
@@ -66,14 +69,12 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   void replayWorkerState();
 
   void setObjectTransform(const rkcommon::math::affine3f &xfm);
- rkcommon::math::affine3f objectTransform() const;
+  rkcommon::math::affine3f objectTransform() const;
   rkcommon::math::affine3f objectTransform_{rkcommon::math::one};
 
  signals:
   void sceneLoadFinished(bool success, const QString &errorMessage);
   void inputModeChanged(RenderWidget::InputMode mode);
-
-  
 
  protected:
   void initializeGL() override;
@@ -89,6 +90,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   void focusInEvent(QFocusEvent *e) override;
   void focusOutEvent(QFocusEvent *e) override;
  private:
+  // Camera helpers shared by orbit mode, fly mode, and object-manipulation overlays.
   static float fitDistanceFromBounds(float maxExtent, float fovyDeg);
   void syncFlyFromOrbit();
   void syncOrbitFromFly();
@@ -151,7 +153,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   InputMode inputMode_ = InputMode::Orbit;
   UpAxis upAxis_ = UpAxis::Z;
 
-  // Orbit camera
+  // Orbit camera state: spherical coordinates around center_.
   rkcommon::math::vec3f center_{0.f, 0.f, 1.5f};
   float dist_ = 4.0f;
   float orbitTheta_ = 0.3f;
@@ -162,7 +164,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   float panSpeed_ = 0.0025f;
   float zoomFactor_ = 0.9f;
 
-  // Fly camera
+  // Fly camera state: free position plus yaw/pitch orientation.
   rkcommon::math::vec3f flyPos_ = rkcommon::math::vec3f(0.f, 0.f, 5.f);
   float flyYaw_ = 0.f;
   float flyPitch_ = 0.f;
@@ -196,5 +198,6 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   uint64_t workerAoAutoReductions_ = 0;
   std::atomic<bool> sceneLoadInProgress_{false};
   std::thread sceneLoadThread_;
+  // When connected, heavy rendering and scene loading happen out of process.
   RenderWorkerClient *renderWorkerClient_ = nullptr;
 };

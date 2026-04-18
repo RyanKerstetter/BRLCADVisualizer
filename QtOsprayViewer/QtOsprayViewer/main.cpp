@@ -17,6 +17,8 @@
 #endif
 
 #ifdef _WIN32
+// A few BRL-CAD diagnostics are known-noisy during startup; route stderr through
+// a filter so expected warnings do not swamp actionable errors.
 static bool shouldSuppressStderrLine(const std::string &line)
 {
   return line.find(
@@ -24,6 +26,7 @@ static bool shouldSuppressStderrLine(const std::string &line)
       != std::string::npos;
 }
 
+// Redirects stderr through a background pipe reader so selected lines can be filtered.
 static void installStderrFilter()
 {
   HANDLE originalStderr = GetStdHandle(STD_ERROR_HANDLE);
@@ -102,6 +105,8 @@ static void installStderrFilter()
 
 static LONG WINAPI crashDumpExceptionFilter(EXCEPTION_POINTERS *exceptionInfo)
 {
+  // Write crash dumps next to the executable so field failures can be inspected
+  // without requiring a debugger to be attached.
   char exePath[MAX_PATH] = {};
   GetModuleFileNameA(nullptr, exePath, MAX_PATH);
 
@@ -151,12 +156,14 @@ static LONG WINAPI crashDumpExceptionFilter(EXCEPTION_POINTERS *exceptionInfo)
   return EXCEPTION_EXECUTE_HANDLER;
 }
 
+// Installs the crash-dump writer as the process-wide unhandled exception filter.
 static void installCrashDumpHandler()
 {
   SetUnhandledExceptionFilter(crashDumpExceptionFilter);
 }
 #endif
 
+// Forwards OSPRay errors to stderr using the application's logging format.
 static void osprayErrorCallback(void *, OSPError error, const char *message)
 {
   fprintf(stderr,
@@ -166,11 +173,13 @@ static void osprayErrorCallback(void *, OSPError error, const char *message)
   fflush(stderr);
 }
 
+// Ignores OSPRay status chatter to keep startup output quiet.
 static void osprayStatusCallback(void *, const char *message)
 {
   (void)message;
 }
 
+// Shows a blocking startup error dialog on Windows or prints to stderr elsewhere.
 static void showFatalStartupError(const char *message)
 {
 #ifdef _WIN32
@@ -180,9 +189,11 @@ static void showFatalStartupError(const char *message)
 #endif
 }
 
+// Initializes OSPRay, starts Qt, and runs the main viewer window.
 int main(int argc, char *argv[])
 {
 #ifdef _WIN32
+  // Install platform-specific diagnostics before OSPRay or Qt start doing work.
   installStderrFilter();
   installCrashDumpHandler();
 #endif
@@ -209,6 +220,7 @@ int main(int argc, char *argv[])
   ospDeviceSetStatusCallback(device, osprayStatusCallback, nullptr);
   ospCommit((OSPObject)device);
 
+  // The viewer and worker both rely on the CPU module being explicitly loaded.
   if (ospLoadModule("cpu") != OSP_NO_ERROR) {
     fprintf(stderr, "IBRT: Failed to load OSPRay CPU module.\n");
     showFatalStartupError("IBRT: Failed to load OSPRay CPU module.");
@@ -217,6 +229,8 @@ int main(int argc, char *argv[])
 
   int rc = 0;
   {
+    // Qt owns the app lifetime from here; MainWindow wires the viewer widget to
+    // the worker process and initial demo loading.
     QApplication a(argc, argv);
     MainWindow w;
     w.show();

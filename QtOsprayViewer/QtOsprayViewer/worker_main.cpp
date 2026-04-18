@@ -14,6 +14,7 @@
 
 namespace {
 
+// Forwards worker-side OSPRay errors to stderr.
 static void osprayErrorCallback(void *, OSPError error, const char *message)
 {
   fprintf(stderr,
@@ -23,11 +24,13 @@ static void osprayErrorCallback(void *, OSPError error, const char *message)
   fflush(stderr);
 }
 
+// Ignores worker-side OSPRay status messages to reduce log noise.
 static void osprayStatusCallback(void *, const char *message)
 {
   (void)message;
 }
 
+// Joins a list of strings using newlines for text-based IPC responses.
 std::string joinLines(const std::vector<std::string> &values)
 {
   std::string out;
@@ -42,6 +45,8 @@ std::string joinLines(const std::vector<std::string> &values)
 std::string makeLoadResultPayload(
     bool success, const OsprayBackend &backend, const std::string &errorMessage)
 {
+  // Keep the scene-load response compact and binary-stable: success flag,
+  // bounds, then an optional trailing error string.
   struct LoadResultPayload
   {
     uint32_t success;
@@ -60,6 +65,7 @@ std::string makeLoadResultPayload(
   return payload;
 }
 
+// Decodes a fixed-size binary payload into a POD structure.
 template <typename T>
 bool readPodPayload(const std::string &payload, T &out)
 {
@@ -71,12 +77,14 @@ bool readPodPayload(const std::string &payload, T &out)
 
 } // namespace
 
+// Runs the render worker process and services IPC requests from the viewer.
 int main(int argc, char *argv[])
 {
 #ifndef _WIN32
   fprintf(stderr, "IBRT render worker currently supports Windows only.\n");
   return 1;
 #else
+  // The worker is launched by the UI process and told which named pipe to bind.
   std::string pipeName;
   for (int i = 1; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--pipe") {
@@ -133,6 +141,7 @@ int main(int argc, char *argv[])
   ospCommit(reinterpret_cast<OSPObject>(device));
   ospLoadModule("cpu");
 
+  // The worker owns a single backend instance and services one request at a time.
   OsprayBackend backend;
   backend.init();
   backend.resize(1, 1);
@@ -234,6 +243,8 @@ int main(int argc, char *argv[])
       break;
 
     case ibrt::ipc::MessageType::RequestFrame: {
+      // Rendering is incremental: each request asks the backend to advance the
+      // current progressive sequence and return the latest display buffer.
       const bool updated = backend.advanceRender();
       struct FrameHeader
       {

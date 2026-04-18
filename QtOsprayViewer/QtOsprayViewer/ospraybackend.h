@@ -13,6 +13,7 @@
 class OsprayBackend
 {
  public:
+  // Minimal scene-tree representation exposed to the Qt UI for BRL-CAD object picking.
   struct BrlcadNode
   {
     std::string name;
@@ -37,6 +38,7 @@ class OsprayBackend
 
   OsprayBackend() = default;
 
+  // Backend lifecycle and render loop.
   void init();
   void resize(int w, int h);
   const std::string &currentRenderer() const;
@@ -66,6 +68,7 @@ class OsprayBackend
   void setAoSamples(int samples);
   void setPixelSamples(int samples);
 
+  // Dynamic-quality controls used by the viewport and worker UI.
   void setSettingsMode(SettingsMode mode);
   SettingsMode settingsMode() const;
 
@@ -119,6 +122,8 @@ class OsprayBackend
   float renderFPS() const;
 
  private:
+  // Camera edits may arrive while a frame is still rendering. Pending state is
+  // buffered here and applied between completed passes.
   struct PendingCameraState
   {
     rkcommon::math::vec3f eye{0.f, 0.f, 1.f};
