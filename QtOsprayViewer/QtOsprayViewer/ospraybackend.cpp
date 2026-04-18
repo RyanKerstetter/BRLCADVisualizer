@@ -1113,7 +1113,6 @@ void OsprayBackend::resetProgressiveState(bool clearDisplay)
   setProgressiveScale(startScaleForCurrentMode());
   slowPassStreak_ = 0;
   accumulatedFrames_ = 0;
-  lastFrameTimeMs_ = 0.0f;
   slowFrameStreak_ = 0;
   aoBackoffSteps_ = 0;
   backoffApplied_ = false;

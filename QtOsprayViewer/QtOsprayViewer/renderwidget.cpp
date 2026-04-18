@@ -1345,11 +1345,26 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
 {
   ImGuiIO &io = ImGui::GetIO();
 
+  io.AddKeyEvent(ImGuiMod_Ctrl, e->modifiers().testFlag(Qt::ControlModifier));
+  io.AddKeyEvent(ImGuiMod_Shift, e->modifiers().testFlag(Qt::ShiftModifier));
+  io.AddKeyEvent(ImGuiMod_Alt, e->modifiers().testFlag(Qt::AltModifier));
+  io.AddKeyEvent(ImGuiMod_Super, e->modifiers().testFlag(Qt::MetaModifier));
+
   auto sendKey = [&](int qtKey, ImGuiKey imguiKey) {
     if (e->key() == qtKey)
       io.AddKeyEvent(imguiKey, true);
   };
 
+  sendKey(Qt::Key_Enter, ImGuiKey_Enter);
+  sendKey(Qt::Key_Return, ImGuiKey_Enter);
+  sendKey(Qt::Key_Backspace, ImGuiKey_Backspace);
+  sendKey(Qt::Key_Delete, ImGuiKey_Delete);
+  sendKey(Qt::Key_Left, ImGuiKey_LeftArrow);
+  sendKey(Qt::Key_Right, ImGuiKey_RightArrow);
+  sendKey(Qt::Key_Up, ImGuiKey_UpArrow);
+  sendKey(Qt::Key_Down, ImGuiKey_DownArrow);
+  sendKey(Qt::Key_Home, ImGuiKey_Home);
+  sendKey(Qt::Key_End, ImGuiKey_End);
   sendKey(Qt::Key_Tab, ImGuiKey_Tab);
   sendKey(Qt::Key_W, ImGuiKey_W);
   sendKey(Qt::Key_A, ImGuiKey_A);
@@ -1357,6 +1372,13 @@ void RenderWidget::keyPressEvent(QKeyEvent *e)
   sendKey(Qt::Key_D, ImGuiKey_D);
   sendKey(Qt::Key_Q, ImGuiKey_Q);
   sendKey(Qt::Key_E, ImGuiKey_E);
+
+  if (!e->text().isEmpty()
+      && !e->modifiers().testFlag(Qt::ControlModifier)
+      && !e->modifiers().testFlag(Qt::AltModifier)
+      && !e->modifiers().testFlag(Qt::MetaModifier)) {
+    io.AddInputCharactersUTF8(e->text().toUtf8().constData());
+  }
 
   if (sceneLoadInProgress_.load())
     return;
@@ -1423,11 +1445,26 @@ void RenderWidget::keyReleaseEvent(QKeyEvent *e)
 {
   ImGuiIO &io = ImGui::GetIO();
 
+  io.AddKeyEvent(ImGuiMod_Ctrl, e->modifiers().testFlag(Qt::ControlModifier));
+  io.AddKeyEvent(ImGuiMod_Shift, e->modifiers().testFlag(Qt::ShiftModifier));
+  io.AddKeyEvent(ImGuiMod_Alt, e->modifiers().testFlag(Qt::AltModifier));
+  io.AddKeyEvent(ImGuiMod_Super, e->modifiers().testFlag(Qt::MetaModifier));
+
   auto sendKey = [&](int qtKey, ImGuiKey imguiKey) {
     if (e->key() == qtKey)
       io.AddKeyEvent(imguiKey, false);
   };
 
+  sendKey(Qt::Key_Enter, ImGuiKey_Enter);
+  sendKey(Qt::Key_Return, ImGuiKey_Enter);
+  sendKey(Qt::Key_Backspace, ImGuiKey_Backspace);
+  sendKey(Qt::Key_Delete, ImGuiKey_Delete);
+  sendKey(Qt::Key_Left, ImGuiKey_LeftArrow);
+  sendKey(Qt::Key_Right, ImGuiKey_RightArrow);
+  sendKey(Qt::Key_Up, ImGuiKey_UpArrow);
+  sendKey(Qt::Key_Down, ImGuiKey_DownArrow);
+  sendKey(Qt::Key_Home, ImGuiKey_Home);
+  sendKey(Qt::Key_End, ImGuiKey_End);
   sendKey(Qt::Key_Tab, ImGuiKey_Tab);
   sendKey(Qt::Key_W, ImGuiKey_W);
   sendKey(Qt::Key_A, ImGuiKey_A);
