@@ -689,6 +689,7 @@ void RenderWidget::paintGL()
     ImGui::PushItemWidth(itemWidth);
   };
   bool settingsChanged = false;
+  const RenderWorkerClient::RenderSettingsState defaultSettings;
   int settingsMode = usingWorkerRenderPath()
       ? workerSettings_.settingsMode
       : (backend_.settingsMode() == OsprayBackend::SettingsMode::Automatic ? 0 : 1);
@@ -868,6 +869,40 @@ void RenderWidget::paintGL()
     }
     ImGui::PopItemWidth();
 
+    if (ImGui::Button("Reset Custom Settings")) {
+      if (usingWorkerRenderPath()) {
+        workerSettings_.customStartScale = defaultSettings.customStartScale;
+        workerSettings_.customTargetFrameTimeMs = defaultSettings.customTargetFrameTimeMs;
+        workerSettings_.customAoSamples = defaultSettings.customAoSamples;
+        workerSettings_.customPixelSamples = defaultSettings.customPixelSamples;
+        workerSettings_.customAccumulationEnabled = defaultSettings.customAccumulationEnabled;
+        workerSettings_.customMaxAccumulationFrames =
+            defaultSettings.customMaxAccumulationFrames;
+        workerSettings_.customLowQualityWhileInteracting =
+            defaultSettings.customLowQualityWhileInteracting;
+        workerSettings_.customFullResAccumulationOnly =
+            defaultSettings.customFullResAccumulationOnly;
+        workerSettings_.customWatchdogTimeoutMs =
+            defaultSettings.customWatchdogTimeoutMs;
+      } else {
+        backend_.setCustomStartScale(defaultSettings.customStartScale);
+        backend_.setCustomTargetFrameTimeMs(defaultSettings.customTargetFrameTimeMs);
+        backend_.setAoSamples(defaultSettings.customAoSamples);
+        backend_.setPixelSamples(defaultSettings.customPixelSamples);
+        backend_.setCustomAccumulationEnabled(defaultSettings.customAccumulationEnabled);
+        backend_.setCustomMaxAccumulationFrames(
+            defaultSettings.customMaxAccumulationFrames);
+        backend_.setCustomLowQualityWhileInteracting(
+            defaultSettings.customLowQualityWhileInteracting);
+        backend_.setCustomFullResAccumulationOnly(
+            defaultSettings.customFullResAccumulationOnly);
+        backend_.setCustomWatchdogTimeoutMs(defaultSettings.customWatchdogTimeoutMs);
+      }
+      resetAccumulationTargets();
+      settingsChanged = true;
+    }
+
+    ImGui::SameLine();
     if (ImGui::Button("Reset Render")) {
       resetAccumulationTargets();
       settingsChanged = true;
