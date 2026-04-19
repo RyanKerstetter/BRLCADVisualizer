@@ -334,6 +334,11 @@ float OsprayBackend::renderFPS() const
   return 1000.0f / lastFrameTimeMs_;
 }
 
+size_t OsprayBackend::debugSceneInstanceCount() const
+{
+  return sceneInstances_.size();
+}
+
 // Returns the minimum corner of the current scene bounds.
 rkcommon::math::vec3f OsprayBackend::getBoundsMin() const
 {
@@ -1632,7 +1637,7 @@ std::vector<OsprayBackend::BrlcadNode> OsprayBackend::listBrlcadHierarchy(
   if (!tmpRtip || !tmpRtip->rti_dbip)
     return roots;
 
-  struct resource localResource;
+  struct resource localResource = RT_RESOURCE_INIT_ZERO;
   rt_init_resource(&localResource, 0, tmpRtip);
 
   struct CleanupGuard

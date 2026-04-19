@@ -1,6 +1,7 @@
 ﻿#include "renderwidget.h"
 
 #include "renderworkerclient.h"
+#include "qualitysettings.h"
 
 #include <QMetaObject>
 #include <QPainter>
@@ -2080,80 +2081,12 @@ bool RenderWidget::preemptWorkerControlIfBusy()
 
 void RenderWidget::seedCustomSettingsFromCurrentAutomatic()
 {
-  const RenderWorkerClient::RenderSettingsState defaultSettings;
-
   if (usingWorkerRenderPath()) {
-    workerSettings_.customTargetFrameTimeMs = workerSettings_.automaticTargetFrameTimeMs;
-    workerSettings_.customAccumulationEnabled = workerSettings_.automaticAccumulationEnabled;
-
-    switch (workerSettings_.automaticPreset) {
-    case 0:
-      workerSettings_.customStartScale = 16;
-      workerSettings_.customAoSamples = 0;
-      workerSettings_.customAoDistance = defaultSettings.customAoDistance;
-      workerSettings_.customPixelSamples = 1;
-      workerSettings_.customMaxPathLength = defaultSettings.customMaxPathLength;
-      workerSettings_.customRoulettePathLength =
-          defaultSettings.customRoulettePathLength;
-      break;
-    case 2:
-      workerSettings_.customStartScale = 4;
-      workerSettings_.customAoSamples = 2;
-      workerSettings_.customAoDistance = defaultSettings.customAoDistance;
-      workerSettings_.customPixelSamples = 2;
-      workerSettings_.customMaxPathLength = defaultSettings.customMaxPathLength;
-      workerSettings_.customRoulettePathLength =
-          defaultSettings.customRoulettePathLength;
-      break;
-    case 1:
-    default:
-      workerSettings_.customStartScale = 8;
-      workerSettings_.customAoSamples = 1;
-      workerSettings_.customAoDistance = defaultSettings.customAoDistance;
-      workerSettings_.customPixelSamples = 1;
-      workerSettings_.customMaxPathLength = defaultSettings.customMaxPathLength;
-      workerSettings_.customRoulettePathLength =
-          defaultSettings.customRoulettePathLength;
-      break;
-    }
-
-    workerSettings_.customMaxAccumulationFrames = 0;
-    workerSettings_.customLowQualityWhileInteracting = true;
-    workerSettings_.customFullResAccumulationOnly = true;
-    workerSettings_.customWatchdogTimeoutMs = defaultSettings.customWatchdogTimeoutMs;
+    ibrt::qualitysettings::seedCustomSettingsFromAutomatic(workerSettings_);
     return;
   }
 
-  const auto preset = backend_.automaticPreset();
-  if (preset == OsprayBackend::AutomaticPreset::Fast) {
-    backend_.setCustomStartScale(16);
-    backend_.setAoSamples(0);
-    backend_.setAoDistance(defaultSettings.customAoDistance);
-    backend_.setPixelSamples(1);
-    backend_.setMaxPathLength(defaultSettings.customMaxPathLength);
-    backend_.setRoulettePathLength(defaultSettings.customRoulettePathLength);
-  } else if (preset == OsprayBackend::AutomaticPreset::Quality) {
-    backend_.setCustomStartScale(4);
-    backend_.setAoSamples(2);
-    backend_.setAoDistance(defaultSettings.customAoDistance);
-    backend_.setPixelSamples(2);
-    backend_.setMaxPathLength(defaultSettings.customMaxPathLength);
-    backend_.setRoulettePathLength(defaultSettings.customRoulettePathLength);
-  } else {
-    backend_.setCustomStartScale(8);
-    backend_.setAoSamples(1);
-    backend_.setAoDistance(defaultSettings.customAoDistance);
-    backend_.setPixelSamples(1);
-    backend_.setMaxPathLength(defaultSettings.customMaxPathLength);
-    backend_.setRoulettePathLength(defaultSettings.customRoulettePathLength);
-  }
-
-  backend_.setCustomTargetFrameTimeMs(backend_.automaticTargetFrameTimeMs());
-  backend_.setCustomAccumulationEnabled(backend_.automaticAccumulationEnabled());
-  backend_.setCustomMaxAccumulationFrames(0);
-  backend_.setCustomLowQualityWhileInteracting(true);
-  backend_.setCustomFullResAccumulationOnly(true);
-  backend_.setCustomWatchdogTimeoutMs(defaultSettings.customWatchdogTimeoutMs);
+  ibrt::qualitysettings::seedBackendCustomSettingsFromAutomatic(backend_);
 }
 
 void RenderWidget::currentViewAngles(float &azimuthDeg, float &elevationDeg) const
@@ -2179,28 +2112,8 @@ void RenderWidget::currentViewAngles(float &azimuthDeg, float &elevationDeg) con
 
 void RenderWidget::mirrorBackendSettingsToWorkerState()
 {
-  workerSettings_.settingsMode =
-      backend_.settingsMode() == OsprayBackend::SettingsMode::Automatic ? 0 : 1;
-  workerSettings_.automaticPreset =
-      backend_.automaticPreset() == OsprayBackend::AutomaticPreset::Fast
-      ? 0
-      : (backend_.automaticPreset() == OsprayBackend::AutomaticPreset::Balanced ? 1 : 2);
-  workerSettings_.automaticTargetFrameTimeMs = backend_.automaticTargetFrameTimeMs();
-  workerSettings_.automaticAccumulationEnabled = backend_.automaticAccumulationEnabled();
-  workerSettings_.customStartScale = backend_.customStartScale();
-  workerSettings_.customTargetFrameTimeMs = backend_.customTargetFrameTimeMs();
-  workerSettings_.customAoSamples = backend_.customAoSamples();
-  workerSettings_.customAoDistance = backend_.customAoDistance();
-  workerSettings_.customPixelSamples = backend_.customPixelSamples();
-  workerSettings_.customMaxPathLength = backend_.customMaxPathLength();
-  workerSettings_.customRoulettePathLength = backend_.customRoulettePathLength();
-  workerSettings_.customAccumulationEnabled = backend_.customAccumulationEnabled();
-  workerSettings_.customMaxAccumulationFrames = backend_.customMaxAccumulationFrames();
-  workerSettings_.customLowQualityWhileInteracting =
-      backend_.customLowQualityWhileInteracting();
-  workerSettings_.customFullResAccumulationOnly =
-      backend_.customFullResAccumulationOnly();
-  workerSettings_.customWatchdogTimeoutMs = backend_.customWatchdogTimeoutMs();
+  ibrt::qualitysettings::mirrorBackendSettingsToWorkerState(
+      backend_, workerSettings_);
 }
 
 void RenderWidget::restartWorkerAndReplayState()

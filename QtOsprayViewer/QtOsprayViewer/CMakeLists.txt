@@ -11,8 +11,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Qt: add its prefix to CMAKE_PREFIX_PATH, e.g.:
 #   cmake -DCMAKE_PREFIX_PATH=C:/Qt/6.11.0/msvc2022_64 ...
 # or set Qt6_DIR directly.
-find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets Test)
 find_package(OpenGL REQUIRED)
+include(CTest)
 
 # ---- OSPRay / rkcommon / Embree / OpenVKL ----
 # Pass via -D flags at configure time, e.g.:
@@ -102,6 +103,8 @@ qt_add_executable(QtOsprayViewer
     renderworkerclient.h
     renderwidget.cpp
     renderwidget.h
+    qualitysettings.cpp
+    qualitysettings.h
     ospraybackend.cpp
     ospraybackend.h
     interactioncontroller.cpp
@@ -114,6 +117,20 @@ add_executable(IBRTRenderWorker
     worker_main.cpp
     ospraybackend.cpp
     ospraybackend.h
+    worker_ipc.cpp
+    worker_ipc.h
+)
+
+add_executable(IBRTTests
+    tests_ibrt.cpp
+    qualitysettings.cpp
+    qualitysettings.h
+    interactioncontroller.cpp
+    interactioncontroller.h
+    ospraybackend.cpp
+    ospraybackend.h
+    renderworkerclient.cpp
+    renderworkerclient.h
     worker_ipc.cpp
     worker_ipc.h
 )
@@ -152,6 +169,16 @@ target_include_directories(IBRTRenderWorker PRIVATE
     $<$<BOOL:${WIN32}>:${TBB_ROOT}/include>
 )
 
+target_include_directories(IBRTTests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${OSPRAY_PREFIX}/include"
+    "${RKCOMMON_PREFIX}/include"
+    "${BRLCAD_INCLUDE_DIR}"
+    "${BRLCAD_INCLUDE_DIR}/brlcad"
+    "${BRLCAD_INCLUDE_DIR}/OpenNURBS"
+    $<$<BOOL:${WIN32}>:${TBB_ROOT}/include>
+)
+
 target_compile_definitions(QtOsprayViewer PRIVATE
     BRLCAD_INSTALL_PREFIX="${BRLCAD_PREFIX}"
 )
@@ -168,6 +195,16 @@ target_link_libraries(QtOsprayViewer PRIVATE
 )
 
 target_link_libraries(IBRTRenderWorker PRIVATE
+    ospray::ospray
+    ${BRLCAD_RT_LIBRARY}
+    ${BRLCAD_BU_LIBRARY}
+    $<$<BOOL:${WIN32}>:TBB::tbb>
+)
+
+target_link_libraries(IBRTTests PRIVATE
+    Qt6::Test
+    Qt6::Core
+    Qt6::Gui
     ospray::ospray
     ${BRLCAD_RT_LIBRARY}
     ${BRLCAD_BU_LIBRARY}
@@ -333,4 +370,71 @@ if(WIN32)
             "$<TARGET_FILE:IBRTRenderWorker>"
             "$<TARGET_FILE_DIR:QtOsprayViewer>/IBRTRenderWorker.exe"
         COMMENT "Deploying render worker executable...")
+
+    add_dependencies(IBRTTests IBRTRenderWorker)
+    add_custom_command(TARGET IBRTTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${OSPRAY_PREFIX}/bin"
+            "$<TARGET_FILE_DIR:IBRTTests>"
+        COMMENT "Copying OSPRay runtime DLLs for tests...")
+    add_custom_command(TARGET IBRTTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${RKCOMMON_PREFIX}/bin"
+            "$<TARGET_FILE_DIR:IBRTTests>"
+        COMMENT "Copying rkcommon runtime DLLs for tests...")
+    add_custom_command(TARGET IBRTTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${EMBREE_PREFIX}/bin"
+            "$<TARGET_FILE_DIR:IBRTTests>"
+        COMMENT "Copying Embree runtime DLLs for tests...")
+    add_custom_command(TARGET IBRTTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${OPENVKL_PREFIX}/bin"
+            "$<TARGET_FILE_DIR:IBRTTests>"
+        COMMENT "Copying OpenVKL runtime DLLs for tests...")
+    add_custom_command(TARGET IBRTTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${BRLCAD_PREFIX}/bin"
+            "$<TARGET_FILE_DIR:IBRTTests>"
+        COMMENT "Copying BRL-CAD runtime DLLs for tests...")
+    if(EXISTS "${TBB_REDIST_DIR}")
+        add_custom_command(TARGET IBRTTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${TBB_REDIST_DIR}"
+                "$<TARGET_FILE_DIR:IBRTTests>"
+            COMMENT "Copying TBB runtime DLLs for tests...")
+    endif()
+    if(BRLCAD_OSPRAY_MODULE_DLL AND EXISTS "${BRLCAD_OSPRAY_MODULE_DLL}")
+        add_custom_command(TARGET IBRTTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${BRLCAD_OSPRAY_MODULE_DLL}"
+                "$<TARGET_FILE_DIR:IBRTTests>/ospray_module_brl_cad.dll"
+            COMMENT "Deploying ospray_module_brl_cad.dll for tests...")
+    endif()
+    add_custom_command(TARGET IBRTTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${RKCOMMON_PREFIX}/bin/rkcommon.dll"
+            "$<TARGET_FILE_DIR:IBRTTests>/rkcommon.dll"
+        COMMENT "Restoring correct rkcommon.dll for tests...")
+    add_custom_command(TARGET IBRTTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${EMBREE_PREFIX}/bin/embree4.dll"
+            "$<TARGET_FILE_DIR:IBRTTests>/embree4.dll"
+        COMMENT "Restoring correct embree4.dll for tests...")
+    add_custom_command(TARGET IBRTTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:IBRTTests>/vcruntime140.dll"
+            "$<TARGET_FILE_DIR:IBRTTests>/vcruntime140_1.dll"
+            "$<TARGET_FILE_DIR:IBRTTests>/msvcp140.dll"
+        COMMENT "Removing bundled CRT DLLs for tests...")
+    add_custom_command(TARGET IBRTTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:IBRTRenderWorker>"
+            "$<TARGET_FILE_DIR:IBRTTests>/IBRTRenderWorker.exe"
+        COMMENT "Deploying render worker executable for tests...")
+    add_custom_command(TARGET IBRTTests POST_BUILD
+        COMMAND "${WINDEPLOYQT}" "$<TARGET_FILE:IBRTTests>"
+        COMMENT "Running windeployqt for tests...")
 endif()
+
+add_test(NAME IBRTTests COMMAND IBRTTests)

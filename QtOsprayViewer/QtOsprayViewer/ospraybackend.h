@@ -126,6 +126,7 @@ class OsprayBackend
 
   float lastFrameTimeMs() const;
   float renderFPS() const;
+  size_t debugSceneInstanceCount() const;
 
  private:
   // Camera edits may arrive while a frame is still rendering. Pending state is
