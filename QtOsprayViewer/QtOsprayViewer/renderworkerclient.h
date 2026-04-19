@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QImage>
+#include <QProcess>
 #include <QString>
 #include <QStringList>
 
@@ -13,8 +14,6 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
-
-class QProcess;
 
 class RenderWorkerClient : public QObject
 {
@@ -104,5 +103,9 @@ class RenderWorkerClient : public QObject
   QString pipeName_;
   QString lastError_;
   uint64_t nextRequestId_ = 2;
+  bool connected_ = false;
+  bool stopInProgress_ = false;
   mutable std::mutex requestMutex_;
+
+  void setConnected(bool connected);
 };

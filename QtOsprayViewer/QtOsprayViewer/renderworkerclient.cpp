@@ -13,6 +13,27 @@
 RenderWorkerClient::RenderWorkerClient(QObject *parent) : QObject(parent)
 {
   process_ = new QProcess(this);
+  connect(process_,
+      &QProcess::errorOccurred,
+      this,
+      [this](QProcess::ProcessError) {
+        if (stopInProgress_)
+          return;
+        lastError_ = process_->errorString();
+        closePipe();
+        setConnected(false);
+      });
+  connect(process_,
+      qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+      this,
+      [this](int, QProcess::ExitStatus exitStatus) {
+        closePipe();
+        if (stopInProgress_)
+          return;
+        if (exitStatus == QProcess::CrashExit && lastError_.isEmpty())
+          lastError_ = QStringLiteral("Render worker crashed.");
+        setConnected(false);
+      });
 }
 
 // Stops the worker process and closes any IPC resources on destruction.
@@ -53,7 +74,8 @@ bool RenderWorkerClient::start(const QString &workerPath)
     return false;
   }
 
-  emit workerConnectionChanged(true);
+  lastError_.clear();
+  setConnected(true);
   return true;
 #endif
 }
@@ -71,32 +93,27 @@ bool RenderWorkerClient::restart()
 // Stops the worker process and tears down the pipe connection.
 void RenderWorkerClient::stop()
 {
+  stopInProgress_ = true;
 #ifdef _WIN32
-  // Best-effort graceful shutdown before tearing down the process handle.
-  if (pipe_ != INVALID_HANDLE_VALUE) {
-    ibrt::ipc::writeMessage(
-        pipe_, {ibrt::ipc::MessageType::Shutdown, 0, std::string()});
-  }
+  // Do not attempt a graceful IPC shutdown here. If the worker is stuck inside
+  // a long render, it will not be servicing pipe reads, and writing Shutdown
+  // would block the UI on the exact hangs we need to preempt.
   closePipe();
 #endif
 
   if (process_->state() != QProcess::NotRunning) {
-    process_->terminate();
-    if (!process_->waitForFinished(2000))
-      process_->kill();
+    process_->kill();
+    process_->waitForFinished(2000);
   }
 
-  emit workerConnectionChanged(false);
+  setConnected(false);
+  stopInProgress_ = false;
 }
 
 // Reports whether the named-pipe connection to the worker is alive.
 bool RenderWorkerClient::isConnected() const
 {
-#ifdef _WIN32
-  return pipe_ != INVALID_HANDLE_VALUE;
-#else
-  return false;
-#endif
+  return connected_;
 }
 
 // Returns the last worker-related error message.
@@ -470,7 +487,7 @@ bool RenderWorkerClient::sendRequestBytes(
   if (!ibrt::ipc::writeMessage(pipe_, request)) {
     lastError_ = QStringLiteral("Failed to send request to render worker.");
     closePipe();
-    emit workerConnectionChanged(false);
+    setConnected(false);
     return false;
   }
 
@@ -478,7 +495,7 @@ bool RenderWorkerClient::sendRequestBytes(
   if (!ibrt::ipc::readMessage(pipe_, response)) {
     lastError_ = QStringLiteral("Failed to read response from render worker.");
     closePipe();
-    emit workerConnectionChanged(false);
+    setConnected(false);
     return false;
   }
 
@@ -541,5 +558,13 @@ void RenderWorkerClient::closePipe()
     CloseHandle(pipe_);
     pipe_ = INVALID_HANDLE_VALUE;
   }
+}
+
+void RenderWorkerClient::setConnected(bool connected)
+{
+  if (connected_ == connected)
+    return;
+  connected_ = connected;
+  emit workerConnectionChanged(connected_);
 }
 #endif

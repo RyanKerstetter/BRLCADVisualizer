@@ -12,7 +12,9 @@
 #include <QWheelEvent>
 
 #include <atomic>
+#include <chrono>
 #include <functional>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -58,6 +60,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   bool reloadBrlcadObject(const QString &topObject);
   QString lastError() const;
   void resetView();
+  void rebuildSceneAndResetView();
   void setInputMode(InputMode mode);
   void setUpAxis(UpAxis axis);
   UpAxis upAxis() const;
@@ -131,6 +134,23 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   void renderOnce();
   void advanceRender();
   void startAsyncLoad(const std::function<void()> &loader, const QString &statusText);
+  void startWorkerPolling();
+  void stopWorkerPolling();
+  void workerPollingLoop();
+  void queueWorkerResize(int w, int h);
+  void queueWorkerCameraUpdate(
+      const rkcommon::math::vec3f &eye,
+      const rkcommon::math::vec3f &center,
+      const rkcommon::math::vec3f &up,
+      float fovyDeg);
+  void queueWorkerResetAccumulation();
+  void queueWorkerRenderer(const QString &rendererType);
+  void queueWorkerSettings(const RenderWorkerClient::RenderSettingsState &settings);
+  void applyLatestWorkerFrame();
+  float workerBusySeconds() const;
+  bool preemptWorkerControlIfBusy();
+  void mirrorBackendSettingsToWorkerState();
+  void restartWorkerAndReplayState();
 
   static float clampf(float v, float lo, float hi);
   static rkcommon::math::vec3f normalizeVec(const rkcommon::math::vec3f &v);
@@ -198,6 +218,34 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   uint64_t workerAoAutoReductions_ = 0;
   std::atomic<bool> sceneLoadInProgress_{false};
   std::thread sceneLoadThread_;
+  std::thread workerPollThread_;
+  std::atomic<bool> workerPollRunning_{false};
+  std::atomic<bool> workerRequestInFlight_{false};
+  std::atomic<bool> workerFrameReady_{false};
+  std::atomic<bool> workerFrameNotifyPending_{false};
+  std::atomic<bool> workerRestartInProgress_{false};
+  mutable std::mutex workerStateMutex_;
+  QImage pendingWorkerImage_;
+  float pendingWorkerFrameTimeMs_ = 0.0f;
+  float pendingWorkerRenderFPS_ = 0.0f;
+  uint64_t pendingWorkerAccumulatedFrames_ = 0;
+  uint64_t pendingWorkerWatchdogCancels_ = 0;
+  uint64_t pendingWorkerAoAutoReductions_ = 0;
+  QString pendingWorkerRenderer_;
+  std::chrono::steady_clock::time_point workerRequestStart_;
+  bool workerPendingResize_ = false;
+  int workerPendingWidth_ = 1;
+  int workerPendingHeight_ = 1;
+  bool workerPendingCamera_ = false;
+  rkcommon::math::vec3f workerPendingEye_{0.f, 0.f, 1.f};
+  rkcommon::math::vec3f workerPendingCenter_{0.f, 0.f, 0.f};
+  rkcommon::math::vec3f workerPendingUp_{0.f, 1.f, 0.f};
+  float workerPendingFovyDeg_ = 60.0f;
+  bool workerPendingResetAccumulation_ = false;
+  bool workerPendingRendererChange_ = false;
+  QString workerPendingRenderer_;
+  bool workerPendingSettingsChange_ = true;
+  RenderWorkerClient::RenderSettingsState workerPendingSettings_;
   // When connected, heavy rendering and scene loading happen out of process.
   RenderWorkerClient *renderWorkerClient_ = nullptr;
 };

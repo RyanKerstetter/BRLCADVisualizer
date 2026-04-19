@@ -398,7 +398,7 @@ void MainWindow::setupMenus()
   });
 
   connect(resetViewAction, &QAction::triggered, this, [this]() {
-    renderWidget_->resetView();
+    renderWidget_->rebuildSceneAndResetView();
   });
 
   connect(exitAction, &QAction::triggered, this, [this]() { close(); });
