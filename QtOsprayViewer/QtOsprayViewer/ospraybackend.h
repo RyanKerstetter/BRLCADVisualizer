@@ -66,7 +66,10 @@ class OsprayBackend
 
   void setRenderer(const std::string &type);
   void setAoSamples(int samples);
+  void setAoDistance(float distance);
   void setPixelSamples(int samples);
+  void setMaxPathLength(int depth);
+  void setRoulettePathLength(int depth);
 
   // Dynamic-quality controls used by the viewport and worker UI.
   void setSettingsMode(SettingsMode mode);
@@ -84,7 +87,10 @@ class OsprayBackend
   void setCustomTargetFrameTimeMs(float ms);
   float customTargetFrameTimeMs() const;
   int customAoSamples() const;
+  float customAoDistance() const;
   int customPixelSamples() const;
+  int customMaxPathLength() const;
+  int customRoulettePathLength() const;
   void setCustomAccumulationEnabled(bool enabled);
   bool customAccumulationEnabled() const;
   void setCustomMaxAccumulationFrames(int frames);
@@ -210,6 +216,9 @@ class OsprayBackend
   bool cameraDirty_ = false;
   int appliedAoSamples_ = -1;
   int appliedPixelSamples_ = -1;
+  float appliedAoDistance_ = -1.0f;
+  int appliedMaxPathLength_ = -1;
+  int appliedRoulettePathLength_ = -1;
   uint64_t watchdogCancelCount_ = 0;
   uint64_t aoAutoReductionCount_ = 0;
   std::chrono::steady_clock::time_point inFlightStart_;
@@ -243,7 +252,10 @@ class OsprayBackend
   int customStartScale_ = 8;
   float customTargetFrameTimeMs_ = 16.0f;
   int customAoSamples_ = 1;
+  float customAoDistance_ = 1e20f;
   int customPixelSamples_ = 1;
+  int customMaxPathLength_ = 20;
+  int customRoulettePathLength_ = 5;
   bool customAccumulationEnabled_ = true;
   int customMaxAccumulationFrames_ = 0;
   bool customLowQualityWhileInteracting_ = true;
@@ -258,8 +270,15 @@ class OsprayBackend
   int maxAccumulationFramesForCurrentMode() const;
   int watchdogTimeoutForCurrentMode() const;
   int configuredAoSamplesForCurrentMode() const;
+  float configuredAoDistanceForCurrentMode() const;
   int configuredPixelSamplesForCurrentMode() const;
+  int configuredMaxPathLengthForCurrentMode() const;
+  int configuredRoulettePathLengthForCurrentMode() const;
   bool fullResAccumulationOnlyForCurrentMode() const;
   bool lowQualityWhileInteractingForCurrentMode() const;
-  void applyRendererSamplingParams(int aoSamples, int pixelSamples);
+  void applyRendererSamplingParams(int aoSamples,
+      float aoDistance,
+      int pixelSamples,
+      int maxPathLength,
+      int roulettePathLength);
 };

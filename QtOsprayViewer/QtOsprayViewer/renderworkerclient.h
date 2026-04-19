@@ -50,7 +50,10 @@ class RenderWorkerClient : public QObject
     int customStartScale = 8;
     float customTargetFrameTimeMs = 16.0f;
     int customAoSamples = 1;
+    float customAoDistance = 1e20f;
     int customPixelSamples = 1;
+    int customMaxPathLength = 20;
+    int customRoulettePathLength = 5;
     bool customAccumulationEnabled = true;
     int customMaxAccumulationFrames = 0;
     bool customLowQualityWhileInteracting = true;

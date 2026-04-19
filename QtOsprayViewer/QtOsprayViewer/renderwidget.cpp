@@ -1,4 +1,4 @@
-#include "renderwidget.h"
+﻿#include "renderwidget.h"
 
 #include "renderworkerclient.h"
 
@@ -663,6 +663,12 @@ void RenderWidget::paintGL()
   }
   ImGui::Text("Up Axis: %s", upAxis_ == UpAxis::Z ? "Z" : "Y");
   ImGui::Text("Resolution: %d x %d", width(), height());
+  const vec3f statsCenter = sceneBoundsCenter();
+  float azimuthDeg = 0.0f;
+  float elevationDeg = 0.0f;
+  currentViewAngles(azimuthDeg, elevationDeg);
+  ImGui::Text("Center: %.3f, %.3f, %.3f", statsCenter.x, statsCenter.y, statsCenter.z);
+  ImGui::Text("Azimuth/Elevation: %.2f / %.2f deg", azimuthDeg, elevationDeg);
 
   ImGui::Separator();
   ImGui::Text("Renderer");
@@ -732,6 +738,7 @@ void RenderWidget::paintGL()
     settingsChanged = true;
   }
   if (ImGui::RadioButton("Custom", settingsMode == 1)) {
+    seedCustomSettingsFromCurrentAutomatic();
     if (usingWorkerRenderPath())
       workerSettings_.settingsMode = 1;
     else {
@@ -851,6 +858,85 @@ void RenderWidget::paintGL()
     }
     ImGui::PopItemWidth();
 
+    // ---- AO + Auto Performance ----
+
+    float sceneExtent = sceneBoundsMaxExtent();
+    if (sceneExtent < 0.001f)
+      sceneExtent = 1.0f;
+
+    float camDist = length(currentCameraPosition() - center_);
+
+    // Base AO distance (camera + scene scaled)
+    float dynamicAODistance =
+        clampf(camDist * 0.2f, sceneExtent * 0.01f, sceneExtent * 0.1f);
+
+    // --- Smoothing ---
+    static float prevAODistance = dynamicAODistance;
+    dynamicAODistance = 0.9f * prevAODistance + 0.1f * dynamicAODistance;
+    prevAODistance = dynamicAODistance;
+
+    // --- Interaction-based reduction ---
+    if (interactionActive_) {
+      dynamicAODistance *= 0.5f;
+      aoSamples = std::max(0, aoSamples - 1);
+    }
+
+    // --- Frame-time adaptive performance ---
+    float frameTime = usingWorkerRenderPath() ? workerLastFrameTimeMs_
+                                              : backend_.lastFrameTimeMs();
+
+    if (frameTime > 25.0f) {
+      dynamicAODistance *= 0.7f;
+      aoSamples = std::max(0, aoSamples - 1);
+    } else if (frameTime < 12.0f) {
+      dynamicAODistance *= 1.1f;
+    }
+
+    // --- Hollow geometry protection (hard clamp) ---
+    float maxAO = sceneExtent * 0.08f;
+    dynamicAODistance = std::min(dynamicAODistance, maxAO);
+
+    // --- Worker stall handling ---
+    if (usingWorkerRenderPath() && workerBusySeconds() > 0.5f) {
+      dynamicAODistance *= 0.6f;
+    }
+
+    // --- Prevent AO explosion (distance vs samples) ---
+    if (dynamicAODistance > sceneExtent * 0.07f) {
+      aoSamples = std::max(1, aoSamples - 1);
+    }
+
+    // ---- Apply to UI / Backend ----
+
+    // Start from current value
+    float aoDistance = usingWorkerRenderPath()
+        ? workerSettings_.customAoDistance
+        : backend_.customAoDistance();
+
+    pushWidthForInlineLabel("AO Distance Limit");
+
+    // UI slider
+    bool changed = ImGui::DragFloat(
+        "AO Distance Limit", &aoDistance, 0.1f, 0.0f, 1000000.0f, "%.1f");
+
+    // If user NOT interacting with slider → override with auto value
+    if (!ImGui::IsItemActive()) {
+      aoDistance = dynamicAODistance;
+      changed = true;
+    }
+
+    // Apply changes
+    if (changed) {
+      if (usingWorkerRenderPath())
+        workerSettings_.customAoDistance = aoDistance;
+      else
+        backend_.setAoDistance(aoDistance);
+
+      settingsChanged = true;
+    }
+
+    ImGui::PopItemWidth();
+
     int pixelSamples = usingWorkerRenderPath() ? workerSettings_.customPixelSamples
                                                : backend_.customPixelSamples();
     pushWidthForInlineLabel("Pixel Samples");
@@ -859,6 +945,35 @@ void RenderWidget::paintGL()
         workerSettings_.customPixelSamples = pixelSamples;
       else {
         backend_.setPixelSamples(pixelSamples);
+        mirrorBackendSettingsToWorkerState();
+      }
+      settingsChanged = true;
+    }
+    ImGui::PopItemWidth();
+
+    int maxPathLength = usingWorkerRenderPath() ? workerSettings_.customMaxPathLength
+                                                : backend_.customMaxPathLength();
+    pushWidthForInlineLabel("Max Depth");
+    if (ImGui::SliderInt("Max Depth", &maxPathLength, 0, 64)) {
+      if (usingWorkerRenderPath())
+        workerSettings_.customMaxPathLength = maxPathLength;
+      else {
+        backend_.setMaxPathLength(maxPathLength);
+        mirrorBackendSettingsToWorkerState();
+      }
+      settingsChanged = true;
+    }
+    ImGui::PopItemWidth();
+
+    int roulettePathLength = usingWorkerRenderPath()
+        ? workerSettings_.customRoulettePathLength
+        : backend_.customRoulettePathLength();
+    pushWidthForInlineLabel("Early Exit Depth");
+    if (ImGui::SliderInt("Early Exit Depth", &roulettePathLength, 0, 64)) {
+      if (usingWorkerRenderPath())
+        workerSettings_.customRoulettePathLength = roulettePathLength;
+      else {
+        backend_.setRoulettePathLength(roulettePathLength);
         mirrorBackendSettingsToWorkerState();
       }
       settingsChanged = true;
@@ -936,7 +1051,11 @@ void RenderWidget::paintGL()
         workerSettings_.customStartScale = defaultSettings.customStartScale;
         workerSettings_.customTargetFrameTimeMs = defaultSettings.customTargetFrameTimeMs;
         workerSettings_.customAoSamples = defaultSettings.customAoSamples;
+        workerSettings_.customAoDistance = defaultSettings.customAoDistance;
         workerSettings_.customPixelSamples = defaultSettings.customPixelSamples;
+        workerSettings_.customMaxPathLength = defaultSettings.customMaxPathLength;
+        workerSettings_.customRoulettePathLength =
+            defaultSettings.customRoulettePathLength;
         workerSettings_.customAccumulationEnabled = defaultSettings.customAccumulationEnabled;
         workerSettings_.customMaxAccumulationFrames =
             defaultSettings.customMaxAccumulationFrames;
@@ -950,7 +1069,10 @@ void RenderWidget::paintGL()
         backend_.setCustomStartScale(defaultSettings.customStartScale);
         backend_.setCustomTargetFrameTimeMs(defaultSettings.customTargetFrameTimeMs);
         backend_.setAoSamples(defaultSettings.customAoSamples);
+        backend_.setAoDistance(defaultSettings.customAoDistance);
         backend_.setPixelSamples(defaultSettings.customPixelSamples);
+        backend_.setMaxPathLength(defaultSettings.customMaxPathLength);
+        backend_.setRoulettePathLength(defaultSettings.customRoulettePathLength);
         backend_.setCustomAccumulationEnabled(defaultSettings.customAccumulationEnabled);
         backend_.setCustomMaxAccumulationFrames(
             defaultSettings.customMaxAccumulationFrames);
@@ -1956,6 +2078,105 @@ bool RenderWidget::preemptWorkerControlIfBusy()
   return true;
 }
 
+void RenderWidget::seedCustomSettingsFromCurrentAutomatic()
+{
+  const RenderWorkerClient::RenderSettingsState defaultSettings;
+
+  if (usingWorkerRenderPath()) {
+    workerSettings_.customTargetFrameTimeMs = workerSettings_.automaticTargetFrameTimeMs;
+    workerSettings_.customAccumulationEnabled = workerSettings_.automaticAccumulationEnabled;
+
+    switch (workerSettings_.automaticPreset) {
+    case 0:
+      workerSettings_.customStartScale = 16;
+      workerSettings_.customAoSamples = 0;
+      workerSettings_.customAoDistance = defaultSettings.customAoDistance;
+      workerSettings_.customPixelSamples = 1;
+      workerSettings_.customMaxPathLength = defaultSettings.customMaxPathLength;
+      workerSettings_.customRoulettePathLength =
+          defaultSettings.customRoulettePathLength;
+      break;
+    case 2:
+      workerSettings_.customStartScale = 4;
+      workerSettings_.customAoSamples = 2;
+      workerSettings_.customAoDistance = defaultSettings.customAoDistance;
+      workerSettings_.customPixelSamples = 2;
+      workerSettings_.customMaxPathLength = defaultSettings.customMaxPathLength;
+      workerSettings_.customRoulettePathLength =
+          defaultSettings.customRoulettePathLength;
+      break;
+    case 1:
+    default:
+      workerSettings_.customStartScale = 8;
+      workerSettings_.customAoSamples = 1;
+      workerSettings_.customAoDistance = defaultSettings.customAoDistance;
+      workerSettings_.customPixelSamples = 1;
+      workerSettings_.customMaxPathLength = defaultSettings.customMaxPathLength;
+      workerSettings_.customRoulettePathLength =
+          defaultSettings.customRoulettePathLength;
+      break;
+    }
+
+    workerSettings_.customMaxAccumulationFrames = 0;
+    workerSettings_.customLowQualityWhileInteracting = true;
+    workerSettings_.customFullResAccumulationOnly = true;
+    workerSettings_.customWatchdogTimeoutMs = defaultSettings.customWatchdogTimeoutMs;
+    return;
+  }
+
+  const auto preset = backend_.automaticPreset();
+  if (preset == OsprayBackend::AutomaticPreset::Fast) {
+    backend_.setCustomStartScale(16);
+    backend_.setAoSamples(0);
+    backend_.setAoDistance(defaultSettings.customAoDistance);
+    backend_.setPixelSamples(1);
+    backend_.setMaxPathLength(defaultSettings.customMaxPathLength);
+    backend_.setRoulettePathLength(defaultSettings.customRoulettePathLength);
+  } else if (preset == OsprayBackend::AutomaticPreset::Quality) {
+    backend_.setCustomStartScale(4);
+    backend_.setAoSamples(2);
+    backend_.setAoDistance(defaultSettings.customAoDistance);
+    backend_.setPixelSamples(2);
+    backend_.setMaxPathLength(defaultSettings.customMaxPathLength);
+    backend_.setRoulettePathLength(defaultSettings.customRoulettePathLength);
+  } else {
+    backend_.setCustomStartScale(8);
+    backend_.setAoSamples(1);
+    backend_.setAoDistance(defaultSettings.customAoDistance);
+    backend_.setPixelSamples(1);
+    backend_.setMaxPathLength(defaultSettings.customMaxPathLength);
+    backend_.setRoulettePathLength(defaultSettings.customRoulettePathLength);
+  }
+
+  backend_.setCustomTargetFrameTimeMs(backend_.automaticTargetFrameTimeMs());
+  backend_.setCustomAccumulationEnabled(backend_.automaticAccumulationEnabled());
+  backend_.setCustomMaxAccumulationFrames(0);
+  backend_.setCustomLowQualityWhileInteracting(true);
+  backend_.setCustomFullResAccumulationOnly(true);
+  backend_.setCustomWatchdogTimeoutMs(defaultSettings.customWatchdogTimeoutMs);
+}
+
+void RenderWidget::currentViewAngles(float &azimuthDeg, float &elevationDeg) const
+{
+  const vec3f forward = normalizeVec(currentCameraForward());
+  const vec3f up = worldUp();
+  const vec3f north = worldForwardReference();
+  const vec3f east = normalizeVec(crossVec(north, up));
+
+  const float upDot = std::clamp(
+      forward.x * up.x + forward.y * up.y + forward.z * up.z, -1.0f, 1.0f);
+  elevationDeg = std::asin(upDot) * 180.0f / 3.14159265f;
+
+  const vec3f projected = normalizeVec(projectOntoPlane(forward, up));
+  const float northComp =
+      projected.x * north.x + projected.y * north.y + projected.z * north.z;
+  const float eastComp =
+      projected.x * east.x + projected.y * east.y + projected.z * east.z;
+  azimuthDeg = std::atan2(eastComp, northComp) * 180.0f / 3.14159265f;
+  if (azimuthDeg < 0.0f)
+    azimuthDeg += 360.0f;
+}
+
 void RenderWidget::mirrorBackendSettingsToWorkerState()
 {
   workerSettings_.settingsMode =
@@ -1969,7 +2190,10 @@ void RenderWidget::mirrorBackendSettingsToWorkerState()
   workerSettings_.customStartScale = backend_.customStartScale();
   workerSettings_.customTargetFrameTimeMs = backend_.customTargetFrameTimeMs();
   workerSettings_.customAoSamples = backend_.customAoSamples();
+  workerSettings_.customAoDistance = backend_.customAoDistance();
   workerSettings_.customPixelSamples = backend_.customPixelSamples();
+  workerSettings_.customMaxPathLength = backend_.customMaxPathLength();
+  workerSettings_.customRoulettePathLength = backend_.customRoulettePathLength();
   workerSettings_.customAccumulationEnabled = backend_.customAccumulationEnabled();
   workerSettings_.customMaxAccumulationFrames = backend_.customMaxAccumulationFrames();
   workerSettings_.customLowQualityWhileInteracting =

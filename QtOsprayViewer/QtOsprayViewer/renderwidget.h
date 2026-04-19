@@ -149,6 +149,8 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   void applyLatestWorkerFrame();
   float workerBusySeconds() const;
   bool preemptWorkerControlIfBusy();
+  void seedCustomSettingsFromCurrentAutomatic();
+  void currentViewAngles(float &azimuthDeg, float &elevationDeg) const;
   void mirrorBackendSettingsToWorkerState();
   void restartWorkerAndReplayState();
 

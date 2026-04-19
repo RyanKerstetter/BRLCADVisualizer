@@ -284,9 +284,17 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
     }
     const int backoffAo = std::max(0, interactionAo - aoBackoffSteps_);
     const int effectiveAoSamples = (passScale_ > 1) ? 0 : backoffAo;
+    const float effectiveAoDistance = configuredAoDistanceForCurrentMode();
     const int effectivePixelSamples =
         (passScale_ > 1) ? 1 : std::max(1, interactionPixel);
-    applyRendererSamplingParams(effectiveAoSamples, effectivePixelSamples);
+    const int effectiveMaxPathLength = configuredMaxPathLengthForCurrentMode();
+    const int effectiveRoulettePathLength =
+        configuredRoulettePathLengthForCurrentMode();
+    applyRendererSamplingParams(effectiveAoSamples,
+        effectiveAoDistance,
+        effectivePixelSamples,
+        effectiveMaxPathLength,
+        effectiveRoulettePathLength);
 
     if (!fixedPreviewMode && passScale_ <= 1 && accumFb_.handle() && accumulationEnabled) {
       if (maxAccumulationFrames > 0
@@ -704,6 +712,22 @@ void OsprayBackend::setAoSamples(int samples)
   resetAccumulation();
 }
 
+// Sets the AO ray distance limit for the current rendering mode.
+void OsprayBackend::setAoDistance(float distance)
+{
+  if (frameInFlight_) {
+    setError("AO distance update ignored while render is in flight.");
+    return;
+  }
+
+  const float clamped = std::clamp(distance, 0.0f, 1e20f);
+  if (std::fabs(customAoDistance_ - clamped) < 0.001f)
+    return;
+
+  customAoDistance_ = clamped;
+  resetAccumulation();
+}
+
 // Sets per-pixel sampling for the current rendering mode.
 void OsprayBackend::setPixelSamples(int samples)
 {
@@ -717,6 +741,38 @@ void OsprayBackend::setPixelSamples(int samples)
     return;
 
   customPixelSamples_ = clamped;
+  resetAccumulation();
+}
+
+// Sets the hard path-depth cap used by renderers that support recursive rays.
+void OsprayBackend::setMaxPathLength(int depth)
+{
+  if (frameInFlight_) {
+    setError("Max path length update ignored while render is in flight.");
+    return;
+  }
+
+  const int clamped = std::clamp(depth, 0, 64);
+  if (customMaxPathLength_ == clamped)
+    return;
+
+  customMaxPathLength_ = clamped;
+  resetAccumulation();
+}
+
+// Sets the depth at which Russian roulette early termination may begin.
+void OsprayBackend::setRoulettePathLength(int depth)
+{
+  if (frameInFlight_) {
+    setError("Early-exit depth update ignored while render is in flight.");
+    return;
+  }
+
+  const int clamped = std::clamp(depth, 0, 64);
+  if (customRoulettePathLength_ == clamped)
+    return;
+
+  customRoulettePathLength_ = clamped;
   resetAccumulation();
 }
 
@@ -819,10 +875,28 @@ int OsprayBackend::customAoSamples() const
   return customAoSamples_;
 }
 
+// Returns the AO distance limit configured for custom mode.
+float OsprayBackend::customAoDistance() const
+{
+  return customAoDistance_;
+}
+
 // Returns the configured pixel samples for custom mode.
 int OsprayBackend::customPixelSamples() const
 {
   return customPixelSamples_;
+}
+
+// Returns the maximum recursive path depth configured for custom mode.
+int OsprayBackend::customMaxPathLength() const
+{
+  return customMaxPathLength_;
+}
+
+// Returns the Russian-roulette start depth configured for custom mode.
+int OsprayBackend::customRoulettePathLength() const
+{
+  return customRoulettePathLength_;
 }
 
 // Enables or disables accumulation in custom mode.
@@ -931,18 +1005,36 @@ bool OsprayBackend::backoffApplied() const
 }
 
 // Pushes the current AO/pixel sample settings into the OSPRay renderer object.
-void OsprayBackend::applyRendererSamplingParams(int aoSamples, int pixelSamples)
+void OsprayBackend::applyRendererSamplingParams(int aoSamples,
+    float aoDistance,
+    int pixelSamples,
+    int maxPathLength,
+    int roulettePathLength)
 {
   const int clampedAo = std::clamp(aoSamples, 0, kMaxSafeAoSamples);
+  const float clampedAoDistance = std::clamp(aoDistance, 0.0f, 1e20f);
   const int clampedPixel = std::clamp(pixelSamples, 1, kMaxSafePixelSamples);
-  if (clampedAo == appliedAoSamples_ && clampedPixel == appliedPixelSamples_)
+  const int clampedMaxPathLength = std::clamp(maxPathLength, 0, 64);
+  const int clampedRoulettePathLength = std::clamp(roulettePathLength, 0, 64);
+  if (clampedAo == appliedAoSamples_
+      && std::fabs(clampedAoDistance - appliedAoDistance_) < 0.001f
+      && clampedPixel == appliedPixelSamples_
+      && clampedMaxPathLength == appliedMaxPathLength_
+      && clampedRoulettePathLength == appliedRoulettePathLength_) {
     return;
+  }
 
   renderer_.setParam("aoSamples", clampedAo);
+  renderer_.setParam("aoDistance", clampedAoDistance);
   renderer_.setParam("pixelSamples", clampedPixel);
+  renderer_.setParam("maxPathLength", clampedMaxPathLength);
+  renderer_.setParam("roulettePathLength", clampedRoulettePathLength);
   renderer_.commit();
   appliedAoSamples_ = clampedAo;
+  appliedAoDistance_ = clampedAoDistance;
   appliedPixelSamples_ = clampedPixel;
+  appliedMaxPathLength_ = clampedMaxPathLength;
+  appliedRoulettePathLength_ = clampedRoulettePathLength;
 }
 
 // Clamps a requested render scale to the supported progressive scale ladder.
@@ -1032,6 +1124,14 @@ int OsprayBackend::configuredAoSamplesForCurrentMode() const
   return 1;
 }
 
+// Returns the AO distance requested by the active quality mode.
+float OsprayBackend::configuredAoDistanceForCurrentMode() const
+{
+  if (settingsMode_ == SettingsMode::Custom)
+    return customAoDistance_;
+  return 1e20f;
+}
+
 // Returns the pixel sample count currently requested by the active quality mode.
 int OsprayBackend::configuredPixelSamplesForCurrentMode() const
 {
@@ -1047,6 +1147,22 @@ int OsprayBackend::configuredPixelSamplesForCurrentMode() const
     return 2;
   }
   return 1;
+}
+
+// Returns the maximum recursive path depth requested by the active quality mode.
+int OsprayBackend::configuredMaxPathLengthForCurrentMode() const
+{
+  if (settingsMode_ == SettingsMode::Custom)
+    return customMaxPathLength_;
+  return 20;
+}
+
+// Returns the Russian-roulette start depth requested by the active quality mode.
+int OsprayBackend::configuredRoulettePathLengthForCurrentMode() const
+{
+  if (settingsMode_ == SettingsMode::Custom)
+    return customRoulettePathLength_;
+  return 5;
 }
 
 // Reports whether only full-resolution passes may accumulate in the active mode.
@@ -1164,6 +1280,10 @@ void OsprayBackend::applyRendererDefaults()
   renderer_.setParam("backgroundColor", 1.0f);
   renderer_.setParam("pixelSamples", configuredPixelSamplesForCurrentMode());
   renderer_.setParam("aoSamples", configuredAoSamplesForCurrentMode());
+  renderer_.setParam("aoDistance", configuredAoDistanceForCurrentMode());
+  renderer_.setParam("maxPathLength", configuredMaxPathLengthForCurrentMode());
+  renderer_.setParam(
+      "roulettePathLength", configuredRoulettePathLengthForCurrentMode());
 
   if (currentRenderer_ == "scivis") {
     renderer_.setParam("shadows", true);
@@ -1176,6 +1296,9 @@ void OsprayBackend::applyRendererDefaults()
   }
 
   renderer_.commit();
+  appliedAoDistance_ = configuredAoDistanceForCurrentMode();
+  appliedMaxPathLength_ = configuredMaxPathLengthForCurrentMode();
+  appliedRoulettePathLength_ = configuredRoulettePathLengthForCurrentMode();
 }
 
 // Assigns a fallback material to geometry that does not provide one.

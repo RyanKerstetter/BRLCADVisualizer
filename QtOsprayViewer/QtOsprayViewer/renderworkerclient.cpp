@@ -338,7 +338,10 @@ bool RenderWorkerClient::setRenderSettings(const RenderSettingsState &settings)
     int32_t customStartScale;
     float customTargetFrameTimeMs;
     int32_t customAoSamples;
+    float customAoDistance;
     int32_t customPixelSamples;
+    int32_t customMaxPathLength;
+    int32_t customRoulettePathLength;
     uint32_t customAccumulationEnabled;
     int32_t customMaxAccumulationFrames;
     uint32_t customLowQualityWhileInteracting;
@@ -351,7 +354,10 @@ bool RenderWorkerClient::setRenderSettings(const RenderSettingsState &settings)
       settings.customStartScale,
       settings.customTargetFrameTimeMs,
       settings.customAoSamples,
+      settings.customAoDistance,
       settings.customPixelSamples,
+      settings.customMaxPathLength,
+      settings.customRoulettePathLength,
       settings.customAccumulationEnabled ? 1u : 0u,
       settings.customMaxAccumulationFrames,
       settings.customLowQualityWhileInteracting ? 1u : 0u,

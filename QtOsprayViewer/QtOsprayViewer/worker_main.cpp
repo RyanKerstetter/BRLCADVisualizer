@@ -300,7 +300,10 @@ int main(int argc, char *argv[])
         int32_t customStartScale;
         float customTargetFrameTimeMs;
         int32_t customAoSamples;
+        float customAoDistance;
         int32_t customPixelSamples;
+        int32_t customMaxPathLength;
+        int32_t customRoulettePathLength;
         uint32_t customAccumulationEnabled;
         int32_t customMaxAccumulationFrames;
         uint32_t customLowQualityWhileInteracting;
@@ -327,7 +330,10 @@ int main(int argc, char *argv[])
       backend.setCustomStartScale(payload.customStartScale);
       backend.setCustomTargetFrameTimeMs(payload.customTargetFrameTimeMs);
       backend.setAoSamples(payload.customAoSamples);
+      backend.setAoDistance(payload.customAoDistance);
       backend.setPixelSamples(payload.customPixelSamples);
+      backend.setMaxPathLength(payload.customMaxPathLength);
+      backend.setRoulettePathLength(payload.customRoulettePathLength);
       backend.setCustomAccumulationEnabled(payload.customAccumulationEnabled != 0);
       backend.setCustomMaxAccumulationFrames(payload.customMaxAccumulationFrames);
       backend.setCustomLowQualityWhileInteracting(
