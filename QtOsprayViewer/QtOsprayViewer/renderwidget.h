@@ -20,6 +20,7 @@
 
 #include <ospray/ospray_cpp/ext/rkcommon.h>
 #include "renderworkerclient.h"
+#include "renderworkerqueuelogic.h"
 #include "imgui.h"
 #include "ospraybackend.h"
 #include "interactioncontroller.h"
@@ -235,19 +236,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   uint64_t pendingWorkerAoAutoReductions_ = 0;
   QString pendingWorkerRenderer_;
   std::chrono::steady_clock::time_point workerRequestStart_;
-  bool workerPendingResize_ = false;
-  int workerPendingWidth_ = 1;
-  int workerPendingHeight_ = 1;
-  bool workerPendingCamera_ = false;
-  rkcommon::math::vec3f workerPendingEye_{0.f, 0.f, 1.f};
-  rkcommon::math::vec3f workerPendingCenter_{0.f, 0.f, 0.f};
-  rkcommon::math::vec3f workerPendingUp_{0.f, 1.f, 0.f};
-  float workerPendingFovyDeg_ = 60.0f;
-  bool workerPendingResetAccumulation_ = false;
-  bool workerPendingRendererChange_ = false;
-  QString workerPendingRenderer_;
-  bool workerPendingSettingsChange_ = true;
-  RenderWorkerClient::RenderSettingsState workerPendingSettings_;
+  ibrt::renderworkerqueue::PendingCommands workerPendingCommands_;
   // When connected, heavy rendering and scene loading happen out of process.
   RenderWorkerClient *renderWorkerClient_ = nullptr;
 };

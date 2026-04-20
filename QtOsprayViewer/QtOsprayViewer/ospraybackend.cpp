@@ -554,6 +554,26 @@ bool OsprayBackend::loadBrlcad(
 
   lastError_.clear();
   try {
+  FILE *dbFile = std::fopen(path.c_str(), "rb");
+  if (!dbFile) {
+    setError("BRL-CAD database file does not exist.");
+    return false;
+  }
+  std::fclose(dbFile);
+
+  if (!topObject.empty() && topObject != "all") {
+    const auto availableObjects = listBrlcadObjects(path);
+    const bool objectExists = std::find(
+                                  availableObjects.begin(),
+                                  availableObjects.end(),
+                                  topObject)
+        != availableObjects.end();
+    if (!objectExists) {
+      setError("Requested BRL-CAD object was not found in the database.");
+      return false;
+    }
+  }
+
   std::string moduleError;
   if (!ensureBrlcadModuleLoaded(moduleError)) {
     setError(moduleError);

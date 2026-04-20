@@ -105,6 +105,12 @@ qt_add_executable(QtOsprayViewer
     renderwidget.h
     qualitysettings.cpp
     qualitysettings.h
+    renderworkflowlogic.cpp
+    renderworkflowlogic.h
+    renderworkerqueuelogic.cpp
+    renderworkerqueuelogic.h
+    renderreplaylogic.cpp
+    renderreplaylogic.h
     ospraybackend.cpp
     ospraybackend.h
     interactioncontroller.cpp
@@ -125,6 +131,12 @@ add_executable(IBRTTests
     tests_ibrt.cpp
     qualitysettings.cpp
     qualitysettings.h
+    renderworkflowlogic.cpp
+    renderworkflowlogic.h
+    renderworkerqueuelogic.cpp
+    renderworkerqueuelogic.h
+    renderreplaylogic.cpp
+    renderreplaylogic.h
     interactioncontroller.cpp
     interactioncontroller.h
     ospraybackend.cpp

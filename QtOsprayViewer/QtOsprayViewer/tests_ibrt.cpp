@@ -19,7 +19,10 @@
 #include "interactioncontroller.h"
 #include "ospraybackend.h"
 #include "qualitysettings.h"
+#include "renderreplaylogic.h"
+#include "renderworkflowlogic.h"
 #include "renderworkerclient.h"
+#include "renderworkerqueuelogic.h"
 #include "worker_ipc.h"
 
 class IbrtTests : public QObject
@@ -29,26 +32,45 @@ class IbrtTests : public QObject
  private slots:
   void initTestCase();
   void cleanupTestCase();
-  void backendCustomSettingsClampToExpectedRanges();
-  void backendAutomaticSettingsRoundTrip();
-  void backendLoadObjRejectsMissingFile();
-  void backendLoadObjParsesSimpleTriangle();
-  void backendListBrlcadObjectsFromGeneratedDb();
-  void backendListBrlcadHierarchyFromGeneratedDb();
-  void backendBrlcadToOsprayProducesGeometry();
-  void backendRenderProducesNonEmptyFrame();
+  void unitBackendCustomSettingsClampToExpectedRanges();
+  void unitBackendAutomaticSettingsRoundTrip();
+  void unitBackendLoadObjRejectsMissingFile();
+  void unitBackendLoadObjParsesSimpleTriangle();
+  void unitQualitySettingsSeedWorkerStateFromAutomatic();
+  void unitQualitySettingsSeedBackendCustomFromAutomatic();
+  void unitQualitySettingsMirrorBackendToWorkerState();
+  void unitInteractionControllerClassifiesDocumentedChords();
+  void unitWorkerIpcPipeNameUsesProcessId();
+  void unitWorkerIpcRoundTripMessage();
+  void unitRenderWorkflowShouldPreemptWorkerControl();
+  void unitRenderWorkflowDecidesRebuildAction();
+  void unitRenderWorkerQueueCoalescesLatestCommands();
+  void unitRenderWorkerQueueDrainClearsOneShotFlags();
+  void unitRenderReplayBuildsObjReplayPlan();
+  void unitRenderReplayBuildsBrlcadReplayPlan();
+  void unitRenderReplaySkipsWhenWorkerPathInactive();
+  void integrationBackendListBrlcadObjectsFromGeneratedDb();
+  void integrationBackendListBrlcadHierarchyFromGeneratedDb();
+  void integrationBackendLoadBrlcadRejectsInvalidFile();
+  void integrationBackendLoadBrlcadRejectsInvalidObject();
+  void integrationBackendBrlcadToOsprayProducesGeometry();
+  void integrationBackendValidBrlcadSceneDoesNotUseDefaultBounds();
+  void integrationBackendRenderProducesNonEmptyFrame();
+  void integrationBackendRenderProducesConsistentFrameForSameInput();
+  void integrationBackendGeometryChangeAffectsRenderedOutput();
+  void integrationWorkerSmokeTestWorkerLifecycle();
+  void integrationWorkerLoadBrlcadProducesNonEmptyFrame();
+  void integrationWorkerLoadBrlcadPropagatesValidBounds();
+  void integrationWorkerFrameMatchesRequestedViewportSize();
   void systemLoadRenderInteractCycle();
   void systemSwitchTopObjectChangesBounds();
   void systemSwitchRendererChangesFrame();
   void systemReloadSameBrlcadObjectStaysRenderable();
+  void systemReloadDifferentBrlcadObjectChangesFrame();
+  void systemWorkerLoadRenderInteractCycle();
+  void systemWorkerRendererSwitchChangesFrame();
+  void systemWorkerReloadDifferentObjectChangesFrame();
   void systemWorkerCrashRecovery();
-  void qualitySettingsSeedWorkerStateFromAutomatic();
-  void qualitySettingsSeedBackendCustomFromAutomatic();
-  void qualitySettingsMirrorBackendToWorkerState();
-  void interactionControllerClassifiesDocumentedChords();
-  void workerIpcPipeNameUsesProcessId();
-  void workerIpcRoundTripMessage();
-  void workerSmokeTestWorkerLifecycle();
 };
 
 namespace {
@@ -103,6 +125,80 @@ std::vector<uint32_t> renderUntilImageReady(OsprayBackend &backend)
   return {};
 }
 
+QImage renderWorkerUntilImageReady(
+    RenderWorkerClient &client, bool requireUpdatedFrame = true)
+{
+  for (int attempt = 0; attempt < 80; ++attempt) {
+    const auto frame = client.requestFrame();
+    if (!frame.image.isNull() && (!requireUpdatedFrame || frame.updated))
+      return frame.image;
+    QThread::msleep(10);
+  }
+  return {};
+}
+
+bool imageHasNonZeroPixel(const QImage &image)
+{
+  if (image.isNull())
+    return false;
+
+  const QImage argbImage = image.convertToFormat(QImage::Format_ARGB32);
+  for (int y = 0; y < argbImage.height(); ++y) {
+    const auto *row =
+        reinterpret_cast<const uint32_t *>(argbImage.constScanLine(y));
+    for (int x = 0; x < argbImage.width(); ++x) {
+      if (row[x] != 0u)
+        return true;
+    }
+  }
+  return false;
+}
+
+RenderWorkerClient::SceneLoadResult loadWorkerExampleScene(
+    RenderWorkerClient &client, const QString &dbPath, const QString &objectName)
+{
+  RenderWorkerClient::RenderSettingsState settings;
+  settings.settingsMode = 1;
+  settings.customStartScale = 4;
+  settings.customAoSamples = 1;
+  settings.customAoDistance = 1e20f;
+  settings.customPixelSamples = 1;
+  settings.customMaxPathLength = 20;
+  settings.customRoulettePathLength = 5;
+
+  if (!client.setRenderSettings(settings))
+    return {};
+  if (!client.resize(128, 128))
+    return {};
+  if (!client.setRenderer(QStringLiteral("ao")))
+    return {};
+  const auto result = client.loadBrlcad(dbPath, objectName);
+  if (!result.success)
+    return result;
+
+  const rkcommon::math::vec3f center(
+      (result.boundsMin.x + result.boundsMax.x) * 0.5f,
+      (result.boundsMin.y + result.boundsMax.y) * 0.5f,
+      (result.boundsMin.z + result.boundsMax.z) * 0.5f);
+  const rkcommon::math::vec3f extent(result.boundsMax.x - result.boundsMin.x,
+      result.boundsMax.y - result.boundsMin.y,
+      result.boundsMax.z - result.boundsMin.z);
+  const float radius =
+      std::max(std::max(std::max(extent.x, extent.y), extent.z) * 0.5f, 0.001f);
+
+  if (!client.setCamera(rkcommon::math::vec3f(center.x + radius * 2.5f,
+          center.y - radius * 2.5f,
+          center.z + radius * 1.5f),
+          center,
+          rkcommon::math::vec3f(0.f, 0.f, 1.f),
+          60.0f)) {
+    return {};
+  }
+  if (!client.resetAccumulation())
+    return {};
+  return result;
+}
+
 void frameCameraToBounds(OsprayBackend &backend)
 {
   const auto center = backend.getBoundsCenter();
@@ -134,7 +230,8 @@ void IbrtTests::cleanupTestCase()
   ospShutdown();
 }
 
-void IbrtTests::backendCustomSettingsClampToExpectedRanges()
+// Unit tests: isolated state, mapping, and helper behavior.
+void IbrtTests::unitBackendCustomSettingsClampToExpectedRanges()
 {
   OsprayBackend backend;
 
@@ -182,7 +279,7 @@ void IbrtTests::backendCustomSettingsClampToExpectedRanges()
   QCOMPARE(backend.customWatchdogTimeoutMs(), 60000);
 }
 
-void IbrtTests::backendAutomaticSettingsRoundTrip()
+void IbrtTests::unitBackendAutomaticSettingsRoundTrip()
 {
   OsprayBackend backend;
 
@@ -207,7 +304,7 @@ void IbrtTests::backendAutomaticSettingsRoundTrip()
   QCOMPARE(backend.automaticAccumulationEnabled(), true);
 }
 
-void IbrtTests::backendLoadObjRejectsMissingFile()
+void IbrtTests::unitBackendLoadObjRejectsMissingFile()
 {
   OsprayBackend backend;
   const bool ok = backend.loadObj("C:/definitely/not/a/real/file.obj");
@@ -215,14 +312,15 @@ void IbrtTests::backendLoadObjRejectsMissingFile()
   QVERIFY(!backend.lastError().empty());
 }
 
-void IbrtTests::backendLoadObjParsesSimpleTriangle()
+void IbrtTests::unitBackendLoadObjParsesSimpleTriangle()
 {
   // Positive OBJ scene loading still needs a stable fixture/environment path.
   // Keep the negative-path coverage for now and leave this as a placeholder.
   return;
 }
 
-void IbrtTests::backendListBrlcadObjectsFromGeneratedDb()
+// Integration tests: real BRL-CAD/OSPRay/worker boundaries without full UI flows.
+void IbrtTests::integrationBackendListBrlcadObjectsFromGeneratedDb()
 {
   const auto dbPath = makeExampleBrlcadDb();
   if (!dbPath.has_value())
@@ -234,7 +332,7 @@ void IbrtTests::backendListBrlcadObjectsFromGeneratedDb()
   QVERIFY(std::find(names.begin(), names.end(), std::string("box_n_ball.r")) != names.end());
 }
 
-void IbrtTests::backendListBrlcadHierarchyFromGeneratedDb()
+void IbrtTests::integrationBackendListBrlcadHierarchyFromGeneratedDb()
 {
   const auto dbPath = makeExampleBrlcadDb();
   if (!dbPath.has_value())
@@ -264,7 +362,32 @@ void IbrtTests::backendListBrlcadHierarchyFromGeneratedDb()
   QVERIFY(hasBox);
 }
 
-void IbrtTests::backendBrlcadToOsprayProducesGeometry()
+void IbrtTests::integrationBackendLoadBrlcadRejectsInvalidFile()
+{
+  OsprayBackend backend;
+  backend.init();
+  backend.resize(128, 128);
+  const bool ok = backend.loadBrlcad("C:/definitely/not/a/real/file.g", "all");
+  QCOMPARE(ok, false);
+  QVERIFY(!backend.lastError().empty());
+}
+
+void IbrtTests::integrationBackendLoadBrlcadRejectsInvalidObject()
+{
+  const auto dbPath = makeExampleBrlcadDb();
+  if (!dbPath.has_value())
+    return;
+
+  OsprayBackend backend;
+  backend.init();
+  backend.resize(128, 128);
+  const bool ok =
+      backend.loadBrlcad(dbPath->toStdString(), "definitely_not_a_real_object.s");
+  QCOMPARE(ok, false);
+  QVERIFY(!backend.lastError().empty());
+}
+
+void IbrtTests::integrationBackendBrlcadToOsprayProducesGeometry()
 {
   const auto dbPath = makeExampleBrlcadDb();
   if (!dbPath.has_value())
@@ -291,7 +414,31 @@ void IbrtTests::backendBrlcadToOsprayProducesGeometry()
   QVERIFY(boundsMax.z >= boundsMin.z);
 }
 
-void IbrtTests::backendRenderProducesNonEmptyFrame()
+void IbrtTests::integrationBackendValidBrlcadSceneDoesNotUseDefaultBounds()
+{
+  const auto dbPath = makeExampleBrlcadDb();
+  if (!dbPath.has_value())
+    return;
+
+  OsprayBackend backend;
+  backend.init();
+  backend.resize(128, 128);
+  if (!backend.loadBrlcad(dbPath->toStdString(), "box_n_ball.r"))
+    return;
+
+  const auto boundsMin = backend.getBoundsMin();
+  const auto boundsMax = backend.getBoundsMax();
+  const bool usingDefaultBounds =
+      std::fabs(boundsMin.x + 1.0f) < 0.0001f
+      && std::fabs(boundsMin.y + 1.0f) < 0.0001f
+      && std::fabs(boundsMin.z + 1.0f) < 0.0001f
+      && std::fabs(boundsMax.x - 1.0f) < 0.0001f
+      && std::fabs(boundsMax.y - 1.0f) < 0.0001f
+      && std::fabs(boundsMax.z - 1.0f) < 0.0001f;
+  QVERIFY(!usingDefaultBounds);
+}
+
+void IbrtTests::integrationBackendRenderProducesNonEmptyFrame()
 {
   const auto dbPath = makeExampleBrlcadDb();
   if (!dbPath.has_value())
@@ -311,6 +458,56 @@ void IbrtTests::backendRenderProducesNonEmptyFrame()
   QVERIFY(frameHasNonZeroPixel(pixels.data(), backend.width(), backend.height()));
 }
 
+void IbrtTests::integrationBackendRenderProducesConsistentFrameForSameInput()
+{
+  const auto dbPath = makeExampleBrlcadDb();
+  if (!dbPath.has_value())
+    return;
+
+  auto renderFrame = [&](std::vector<uint32_t> &outFrame) -> bool {
+    OsprayBackend backend;
+    backend.init();
+    backend.resize(128, 128);
+    if (!backend.loadBrlcad(dbPath->toStdString(), "box_n_ball.r"))
+      return false;
+    frameCameraToBounds(backend);
+    outFrame = renderUntilImageReady(backend);
+    return !outFrame.empty();
+  };
+
+  std::vector<uint32_t> frameA;
+  std::vector<uint32_t> frameB;
+  if (!renderFrame(frameA) || !renderFrame(frameB))
+    return;
+
+  QCOMPARE(frameA, frameB);
+}
+
+void IbrtTests::integrationBackendGeometryChangeAffectsRenderedOutput()
+{
+  const auto dbPath = makeExampleBrlcadDb();
+  if (!dbPath.has_value())
+    return;
+
+  auto renderObject = [&](const char *objectName) -> std::vector<uint32_t> {
+    OsprayBackend backend;
+    backend.init();
+    backend.resize(128, 128);
+    if (!backend.loadBrlcad(dbPath->toStdString(), objectName))
+      return {};
+    frameCameraToBounds(backend);
+    return renderUntilImageReady(backend);
+  };
+
+  const auto ballFrame = renderObject("ball.s");
+  const auto boxFrame = renderObject("box.s");
+  if (ballFrame.empty() || boxFrame.empty())
+    return;
+
+  QVERIFY(ballFrame != boxFrame);
+}
+
+// System tests: user-visible flows across multiple real components.
 void IbrtTests::systemLoadRenderInteractCycle()
 {
   const auto dbPath = makeExampleBrlcadDb();
@@ -426,19 +623,188 @@ void IbrtTests::systemReloadSameBrlcadObjectStaysRenderable()
   QVERIFY(frameHasNonZeroPixel(secondFrame.data(), backend.width(), backend.height()));
 }
 
-void IbrtTests::systemWorkerCrashRecovery()
+void IbrtTests::systemReloadDifferentBrlcadObjectChangesFrame()
 {
+  const auto dbPath = makeExampleBrlcadDb();
+  if (!dbPath.has_value())
+    return;
+
+  OsprayBackend backend;
+  backend.init();
+  backend.resize(128, 128);
+  if (!backend.loadBrlcad(dbPath->toStdString(), "ball.s"))
+    return;
+
+  frameCameraToBounds(backend);
+  const auto ballFrame = renderUntilImageReady(backend);
+  if (ballFrame.empty())
+    return;
+
+  if (!backend.loadBrlcad(dbPath->toStdString(), "box.s"))
+    return;
+
+  frameCameraToBounds(backend);
+  const auto boxFrame = renderUntilImageReady(backend);
+  if (boxFrame.empty())
+    return;
+
+  QVERIFY(ballFrame != boxFrame);
+}
+
+void IbrtTests::systemWorkerLoadRenderInteractCycle()
+{
+#ifndef _WIN32
+  QSKIP("Render worker system test is Windows-only.");
+#else
+  const auto dbPath = makeExampleBrlcadDb();
+  if (!dbPath.has_value())
+    QSKIP("Generated BRL-CAD fixture database is unavailable.");
+
   const QString workerPath =
       QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
   if (!QFileInfo::exists(workerPath))
-    return;
+    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
 
   RenderWorkerClient client;
   if (!client.start(workerPath))
-    return;
+    QSKIP(qPrintable(client.lastError()));
 
-  QVERIFY(client.resize(96, 96));
-  QVERIFY(client.setRenderer(QStringLiteral("ao")));
+  const auto loadResult =
+      loadWorkerExampleScene(client, *dbPath, QStringLiteral("box_n_ball.r"));
+  QVERIFY(loadResult.success);
+
+  const rkcommon::math::vec3f center(
+      (loadResult.boundsMin.x + loadResult.boundsMax.x) * 0.5f,
+      (loadResult.boundsMin.y + loadResult.boundsMax.y) * 0.5f,
+      (loadResult.boundsMin.z + loadResult.boundsMax.z) * 0.5f);
+  const rkcommon::math::vec3f extent(
+      loadResult.boundsMax.x - loadResult.boundsMin.x,
+      loadResult.boundsMax.y - loadResult.boundsMin.y,
+      loadResult.boundsMax.z - loadResult.boundsMin.z);
+  const float radius =
+      std::max(std::max(std::max(extent.x, extent.y), extent.z) * 0.5f, 0.001f);
+
+  QVERIFY(client.setCamera(
+      rkcommon::math::vec3f(center.x + radius * 2.5f,
+          center.y - radius * 2.5f,
+          center.z + radius * 1.5f),
+      center,
+      rkcommon::math::vec3f(0.f, 0.f, 1.f),
+      60.0f));
+  QVERIFY(client.resetAccumulation());
+  const QImage frameA = renderWorkerUntilImageReady(client);
+  QVERIFY(!frameA.isNull());
+
+  QVERIFY(client.setCamera(
+      rkcommon::math::vec3f(center.x - radius * 3.0f,
+          center.y + radius * 2.0f,
+          center.z + radius * 1.25f),
+      center,
+      rkcommon::math::vec3f(0.f, 0.f, 1.f),
+      60.0f));
+  QVERIFY(client.resetAccumulation());
+  const QImage frameB = renderWorkerUntilImageReady(client);
+  QVERIFY(!frameB.isNull());
+  QVERIFY(frameA != frameB);
+
+  client.stop();
+#endif
+}
+
+void IbrtTests::systemWorkerRendererSwitchChangesFrame()
+{
+#ifndef _WIN32
+  QSKIP("Render worker system test is Windows-only.");
+#else
+  const auto dbPath = makeExampleBrlcadDb();
+  if (!dbPath.has_value())
+    QSKIP("Generated BRL-CAD fixture database is unavailable.");
+
+  const QString workerPath =
+      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+  if (!QFileInfo::exists(workerPath))
+    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+
+  RenderWorkerClient client;
+  if (!client.start(workerPath))
+    QSKIP(qPrintable(client.lastError()));
+
+  const auto loadResult =
+      loadWorkerExampleScene(client, *dbPath, QStringLiteral("box_n_ball.r"));
+  QVERIFY(loadResult.success);
+
+  const QImage aoFrame = renderWorkerUntilImageReady(client);
+  QVERIFY(!aoFrame.isNull());
+
+  QVERIFY(client.setRenderer(QStringLiteral("scivis")));
+  QVERIFY(client.resetAccumulation());
+  const QImage sciVisFrame = renderWorkerUntilImageReady(client);
+  QVERIFY(!sciVisFrame.isNull());
+  QVERIFY(aoFrame != sciVisFrame);
+
+  client.stop();
+#endif
+}
+
+void IbrtTests::systemWorkerReloadDifferentObjectChangesFrame()
+{
+#ifndef _WIN32
+  QSKIP("Render worker system test is Windows-only.");
+#else
+  const auto dbPath = makeExampleBrlcadDb();
+  if (!dbPath.has_value())
+    QSKIP("Generated BRL-CAD fixture database is unavailable.");
+
+  const QString workerPath =
+      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+  if (!QFileInfo::exists(workerPath))
+    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+
+  RenderWorkerClient client;
+  if (!client.start(workerPath))
+    QSKIP(qPrintable(client.lastError()));
+
+  const auto ballResult =
+      loadWorkerExampleScene(client, *dbPath, QStringLiteral("ball.s"));
+  QVERIFY(ballResult.success);
+  const QImage ballFrame = renderWorkerUntilImageReady(client);
+  QVERIFY(!ballFrame.isNull());
+
+  const auto boxResult =
+      loadWorkerExampleScene(client, *dbPath, QStringLiteral("box.s"));
+  QVERIFY(boxResult.success);
+  const QImage boxFrame = renderWorkerUntilImageReady(client);
+  QVERIFY(!boxFrame.isNull());
+  QVERIFY(ballFrame != boxFrame);
+
+  client.stop();
+#endif
+}
+
+void IbrtTests::systemWorkerCrashRecovery()
+{
+#ifndef _WIN32
+  QSKIP("Render worker system test is Windows-only.");
+#else
+  const auto dbPath = makeExampleBrlcadDb();
+  if (!dbPath.has_value())
+    QSKIP("Generated BRL-CAD fixture database is unavailable.");
+
+  const QString workerPath =
+      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+  if (!QFileInfo::exists(workerPath))
+    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+
+  RenderWorkerClient client;
+  if (!client.start(workerPath))
+    QSKIP(qPrintable(client.lastError()));
+
+  const auto loadResult =
+      loadWorkerExampleScene(client, *dbPath, QStringLiteral("box_n_ball.r"));
+  QVERIFY(loadResult.success);
+  const QImage firstFrame = renderWorkerUntilImageReady(client);
+  QVERIFY(!firstFrame.isNull());
+  QVERIFY(imageHasNonZeroPixel(firstFrame));
 
   QProcess killer;
   killer.start(QStringLiteral("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"),
@@ -450,12 +816,17 @@ void IbrtTests::systemWorkerCrashRecovery()
   QThread::msleep(250);
 
   QVERIFY(client.restart());
-  QVERIFY(client.resize(96, 96));
-  QVERIFY(client.setRenderer(QStringLiteral("ao")));
+  const auto reloaded =
+      loadWorkerExampleScene(client, *dbPath, QStringLiteral("box_n_ball.r"));
+  QVERIFY(reloaded.success);
+  const QImage secondFrame = renderWorkerUntilImageReady(client);
+  QVERIFY(!secondFrame.isNull());
+  QVERIFY(imageHasNonZeroPixel(secondFrame));
   client.stop();
+#endif
 }
 
-void IbrtTests::qualitySettingsSeedWorkerStateFromAutomatic()
+void IbrtTests::unitQualitySettingsSeedWorkerStateFromAutomatic()
 {
   RenderWorkerClient::RenderSettingsState settings;
   settings.automaticPreset = 2;
@@ -480,7 +851,7 @@ void IbrtTests::qualitySettingsSeedWorkerStateFromAutomatic()
   QCOMPARE(settings.customFullResAccumulationOnly, true);
 }
 
-void IbrtTests::qualitySettingsSeedBackendCustomFromAutomatic()
+void IbrtTests::unitQualitySettingsSeedBackendCustomFromAutomatic()
 {
   OsprayBackend backend;
   backend.setAutomaticPreset(OsprayBackend::AutomaticPreset::Fast);
@@ -502,7 +873,7 @@ void IbrtTests::qualitySettingsSeedBackendCustomFromAutomatic()
   QCOMPARE(backend.customRoulettePathLength(), 5);
 }
 
-void IbrtTests::qualitySettingsMirrorBackendToWorkerState()
+void IbrtTests::unitQualitySettingsMirrorBackendToWorkerState()
 {
   OsprayBackend backend;
   backend.setSettingsMode(OsprayBackend::SettingsMode::Custom);
@@ -543,7 +914,7 @@ void IbrtTests::qualitySettingsMirrorBackendToWorkerState()
   QCOMPARE(settings.customWatchdogTimeoutMs, 2222);
 }
 
-void IbrtTests::interactionControllerClassifiesDocumentedChords()
+void IbrtTests::unitInteractionControllerClassifiesDocumentedChords()
 {
   using Action = InteractionController::Action;
   using Axis = InteractionController::AxisConstraint;
@@ -605,13 +976,13 @@ void IbrtTests::interactionControllerClassifiesDocumentedChords()
   }
 }
 
-void IbrtTests::workerIpcPipeNameUsesProcessId()
+void IbrtTests::unitWorkerIpcPipeNameUsesProcessId()
 {
   QCOMPARE(QString::fromStdString(ibrt::ipc::makePipeName(42)),
       QStringLiteral("\\\\.\\pipe\\IBRT.RenderWorker.42"));
 }
 
-void IbrtTests::workerIpcRoundTripMessage()
+void IbrtTests::unitWorkerIpcRoundTripMessage()
 {
   // Raw named-pipe round-trip testing is too flaky under the current Windows
   // CI/test harness. Keep the stable pipe-name coverage and leave deeper IPC
@@ -619,7 +990,194 @@ void IbrtTests::workerIpcRoundTripMessage()
   return;
 }
 
-void IbrtTests::workerSmokeTestWorkerLifecycle()
+void IbrtTests::unitRenderWorkflowShouldPreemptWorkerControl()
+{
+  QVERIFY(!ibrt::renderworkflow::shouldPreemptWorkerControl(false, 10.0f));
+  QVERIFY(!ibrt::renderworkflow::shouldPreemptWorkerControl(true, 0.5f));
+  QVERIFY(ibrt::renderworkflow::shouldPreemptWorkerControl(true, 0.51f));
+}
+
+void IbrtTests::unitRenderWorkflowDecidesRebuildAction()
+{
+  using ibrt::renderworkflow::RebuildAction;
+  using ibrt::renderworkflow::RebuildInputs;
+
+  {
+    const auto decision = ibrt::renderworkflow::decideRebuildAction(
+        RebuildInputs{true, false, false, false, {}, {}, {}});
+    QCOMPARE(decision.action, RebuildAction::None);
+    QCOMPARE(decision.shouldResetView, false);
+  }
+
+  {
+    const auto decision = ibrt::renderworkflow::decideRebuildAction(
+        RebuildInputs{false, true, true, false, {}, {}, {}});
+    QCOMPARE(decision.action, RebuildAction::RestartWorker);
+    QCOMPARE(decision.shouldResetView, true);
+  }
+
+  {
+    const auto decision = ibrt::renderworkflow::decideRebuildAction(
+        RebuildInputs{false, true, false, false, {}, {}, {}});
+    QCOMPARE(decision.action, RebuildAction::RestartWorker);
+    QCOMPARE(decision.shouldResetView, false);
+  }
+
+  {
+    const auto decision = ibrt::renderworkflow::decideRebuildAction(
+        RebuildInputs{false, false, false, true, QStringLiteral("model.obj"), {}, {}});
+    QCOMPARE(decision.action, RebuildAction::ReloadObj);
+    QCOMPARE(decision.shouldResetView, true);
+  }
+
+  {
+    const auto decision = ibrt::renderworkflow::decideRebuildAction(RebuildInputs{
+        false, false, false, false, {}, QStringLiteral("scene.g"), QStringLiteral("part.r")});
+    QCOMPARE(decision.action, RebuildAction::ReloadBrlcad);
+    QCOMPARE(decision.brlcadObjectName, QStringLiteral("part.r"));
+    QCOMPARE(decision.shouldResetView, true);
+  }
+
+  {
+    const auto decision = ibrt::renderworkflow::decideRebuildAction(RebuildInputs{
+        false, false, false, false, {}, QStringLiteral("scene.g"), QStringLiteral("   ")});
+    QCOMPARE(decision.action, RebuildAction::ReloadBrlcad);
+    QCOMPARE(decision.brlcadObjectName, QStringLiteral("all"));
+    QCOMPARE(decision.shouldResetView, true);
+  }
+
+  {
+    const auto decision = ibrt::renderworkflow::decideRebuildAction(
+        RebuildInputs{false, false, false, false, {}, {}, {}});
+    QCOMPARE(decision.action, RebuildAction::ResetViewOnly);
+    QCOMPARE(decision.shouldResetView, true);
+  }
+}
+
+void IbrtTests::unitRenderWorkerQueueCoalescesLatestCommands()
+{
+  ibrt::renderworkerqueue::PendingCommands commands;
+
+  ibrt::renderworkerqueue::queueResize(commands, 0, 72);
+  ibrt::renderworkerqueue::queueResize(commands, 96, 48);
+  QCOMPARE(commands.resize, true);
+  QCOMPARE(commands.width, 96);
+  QCOMPARE(commands.height, 48);
+
+  ibrt::renderworkerqueue::queueRenderer(commands, QStringLiteral("ao"));
+  ibrt::renderworkerqueue::queueRenderer(commands, QStringLiteral("scivis"));
+  QCOMPARE(commands.renderer, true);
+  QCOMPARE(commands.rendererType, QStringLiteral("scivis"));
+
+  RenderWorkerClient::RenderSettingsState settings;
+  settings.customStartScale = 4;
+  ibrt::renderworkerqueue::queueSettings(commands, settings);
+  settings.customStartScale = 16;
+  ibrt::renderworkerqueue::queueSettings(commands, settings);
+  QCOMPARE(commands.settings, true);
+  QCOMPARE(commands.settingsState.customStartScale, 16);
+
+  ibrt::renderworkerqueue::queueCamera(commands,
+      rkcommon::math::vec3f(1.f, 2.f, 3.f),
+      rkcommon::math::vec3f(4.f, 5.f, 6.f),
+      rkcommon::math::vec3f(0.f, 0.f, 1.f),
+      45.0f);
+  ibrt::renderworkerqueue::queueCamera(commands,
+      rkcommon::math::vec3f(7.f, 8.f, 9.f),
+      rkcommon::math::vec3f(1.f, 2.f, 3.f),
+      rkcommon::math::vec3f(0.f, 1.f, 0.f),
+      60.0f);
+  QCOMPARE(commands.camera, true);
+  QCOMPARE(commands.eye.x, 7.0f);
+  QCOMPARE(commands.eye.y, 8.0f);
+  QCOMPARE(commands.eye.z, 9.0f);
+  QCOMPARE(commands.center.x, 1.0f);
+  QCOMPARE(commands.up.y, 1.0f);
+  QCOMPARE(commands.fovyDeg, 60.0f);
+}
+
+void IbrtTests::unitRenderWorkerQueueDrainClearsOneShotFlags()
+{
+  ibrt::renderworkerqueue::PendingCommands commands;
+  ibrt::renderworkerqueue::queueResize(commands, 64, 64);
+  ibrt::renderworkerqueue::queueRenderer(commands, QStringLiteral("ao"));
+  ibrt::renderworkerqueue::queueResetAccumulation(commands);
+
+  const auto drained = ibrt::renderworkerqueue::drain(commands);
+  QCOMPARE(drained.resize, true);
+  QCOMPARE(drained.renderer, true);
+  QCOMPARE(drained.resetAccumulation, true);
+  QCOMPARE(drained.width, 64);
+  QCOMPARE(drained.rendererType, QStringLiteral("ao"));
+
+  QCOMPARE(commands.resize, false);
+  QCOMPARE(commands.camera, false);
+  QCOMPARE(commands.resetAccumulation, false);
+  QCOMPARE(commands.renderer, false);
+  QCOMPARE(commands.settings, false);
+}
+
+void IbrtTests::unitRenderReplayBuildsObjReplayPlan()
+{
+  const auto plan = ibrt::renderreplay::buildReplayPlan(
+      {true,
+          320,
+          200,
+          QStringLiteral("ao"),
+          true,
+          QStringLiteral("model.obj"),
+          {},
+          {}});
+  QCOMPARE(plan.shouldReplay, true);
+  QCOMPARE(plan.width, 320);
+  QCOMPARE(plan.height, 200);
+  QCOMPARE(plan.renderer, QStringLiteral("ao"));
+  QCOMPARE(plan.sceneType, ibrt::renderreplay::SceneReplayType::Obj);
+  QCOMPARE(plan.scenePath, QStringLiteral("model.obj"));
+  QCOMPARE(plan.shouldSyncCamera, true);
+  QCOMPARE(plan.shouldResetAccumulation, true);
+  QCOMPARE(plan.shouldRenderOnce, true);
+}
+
+void IbrtTests::unitRenderReplayBuildsBrlcadReplayPlan()
+{
+  const auto explicitPlan = ibrt::renderreplay::buildReplayPlan(
+      {true,
+          640,
+          480,
+          QStringLiteral("scivis"),
+          false,
+          {},
+          QStringLiteral("scene.g"),
+          QStringLiteral("part.r")});
+  QCOMPARE(explicitPlan.sceneType, ibrt::renderreplay::SceneReplayType::Brlcad);
+  QCOMPARE(explicitPlan.scenePath, QStringLiteral("scene.g"));
+  QCOMPARE(explicitPlan.brlcadObjectName, QStringLiteral("part.r"));
+
+  const auto fallbackPlan = ibrt::renderreplay::buildReplayPlan(
+      {true,
+          10,
+          12,
+          QStringLiteral("scivis"),
+          false,
+          {},
+          QStringLiteral("scene.g"),
+          QStringLiteral("   ")});
+  QCOMPARE(fallbackPlan.sceneType, ibrt::renderreplay::SceneReplayType::Brlcad);
+  QCOMPARE(fallbackPlan.brlcadObjectName, QStringLiteral("all"));
+  QCOMPARE(fallbackPlan.width, 10);
+  QCOMPARE(fallbackPlan.height, 12);
+}
+
+void IbrtTests::unitRenderReplaySkipsWhenWorkerPathInactive()
+{
+  const auto inactivePlan = ibrt::renderreplay::buildReplayPlan(
+      {false, 0, 0, {}, false, {}, {}, {}});
+  QCOMPARE(inactivePlan.shouldReplay, false);
+  QCOMPARE(inactivePlan.sceneType, ibrt::renderreplay::SceneReplayType::None);
+}
+
+void IbrtTests::integrationWorkerSmokeTestWorkerLifecycle()
 {
 #ifndef _WIN32
   QSKIP("Render worker smoke test is Windows-only.");
@@ -682,6 +1240,124 @@ void IbrtTests::workerSmokeTestWorkerLifecycle()
   QVERIFY(client.isConnected());
   std::fprintf(stderr, "IBRTTests: stopping worker\n");
 
+  client.stop();
+#endif
+}
+
+void IbrtTests::integrationWorkerLoadBrlcadProducesNonEmptyFrame()
+{
+#ifndef _WIN32
+  QSKIP("Render worker integration test is Windows-only.");
+#else
+  const auto dbPath = makeExampleBrlcadDb();
+  if (!dbPath.has_value())
+    QSKIP("Generated BRL-CAD fixture database is unavailable.");
+
+  const QString workerPath =
+      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+  if (!QFileInfo::exists(workerPath))
+    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+
+  RenderWorkerClient client;
+  if (!client.start(workerPath))
+    QSKIP(qPrintable(client.lastError()));
+
+  const auto result =
+      loadWorkerExampleScene(client, *dbPath, QStringLiteral("box_n_ball.r"));
+  QVERIFY(result.success);
+
+  const QImage frame = renderWorkerUntilImageReady(client);
+  QVERIFY(!frame.isNull());
+  QVERIFY(imageHasNonZeroPixel(frame));
+  client.stop();
+#endif
+}
+
+void IbrtTests::integrationWorkerLoadBrlcadPropagatesValidBounds()
+{
+#ifndef _WIN32
+  QSKIP("Render worker integration test is Windows-only.");
+#else
+  const auto dbPath = makeExampleBrlcadDb();
+  if (!dbPath.has_value())
+    QSKIP("Generated BRL-CAD fixture database is unavailable.");
+
+  const QString workerPath =
+      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+  if (!QFileInfo::exists(workerPath))
+    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+
+  RenderWorkerClient client;
+  if (!client.start(workerPath))
+    QSKIP(qPrintable(client.lastError()));
+
+  const auto result =
+      loadWorkerExampleScene(client, *dbPath, QStringLiteral("box_n_ball.r"));
+  QVERIFY(result.success);
+  QVERIFY(std::isfinite(result.boundsMin.x));
+  QVERIFY(std::isfinite(result.boundsMin.y));
+  QVERIFY(std::isfinite(result.boundsMin.z));
+  QVERIFY(std::isfinite(result.boundsMax.x));
+  QVERIFY(std::isfinite(result.boundsMax.y));
+  QVERIFY(std::isfinite(result.boundsMax.z));
+  QVERIFY(result.boundsMax.x >= result.boundsMin.x);
+  QVERIFY(result.boundsMax.y >= result.boundsMin.y);
+  QVERIFY(result.boundsMax.z >= result.boundsMin.z);
+  client.stop();
+#endif
+}
+
+void IbrtTests::integrationWorkerFrameMatchesRequestedViewportSize()
+{
+#ifndef _WIN32
+  QSKIP("Render worker integration test is Windows-only.");
+#else
+  const auto dbPath = makeExampleBrlcadDb();
+  if (!dbPath.has_value())
+    QSKIP("Generated BRL-CAD fixture database is unavailable.");
+
+  const QString workerPath =
+      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+  if (!QFileInfo::exists(workerPath))
+    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+
+  RenderWorkerClient client;
+  if (!client.start(workerPath))
+    QSKIP(qPrintable(client.lastError()));
+
+  RenderWorkerClient::RenderSettingsState settings;
+  settings.settingsMode = 1;
+  settings.customStartScale = 4;
+  settings.customAoSamples = 1;
+  settings.customAoDistance = 1e20f;
+  settings.customPixelSamples = 1;
+  settings.customMaxPathLength = 20;
+  settings.customRoulettePathLength = 5;
+  QVERIFY(client.setRenderSettings(settings));
+  QVERIFY(client.resize(96, 72));
+  QVERIFY(client.setRenderer(QStringLiteral("ao")));
+  const auto result = client.loadBrlcad(*dbPath, QStringLiteral("box_n_ball.r"));
+  QVERIFY(result.success);
+  const rkcommon::math::vec3f center(
+      (result.boundsMin.x + result.boundsMax.x) * 0.5f,
+      (result.boundsMin.y + result.boundsMax.y) * 0.5f,
+      (result.boundsMin.z + result.boundsMax.z) * 0.5f);
+  const rkcommon::math::vec3f extent(result.boundsMax.x - result.boundsMin.x,
+      result.boundsMax.y - result.boundsMin.y,
+      result.boundsMax.z - result.boundsMin.z);
+  const float radius =
+      std::max(std::max(std::max(extent.x, extent.y), extent.z) * 0.5f, 0.001f);
+  QVERIFY(client.setCamera(rkcommon::math::vec3f(center.x + radius * 2.5f,
+              center.y - radius * 2.5f,
+              center.z + radius * 1.5f),
+      center,
+      rkcommon::math::vec3f(0.f, 0.f, 1.f),
+      60.0f));
+  QVERIFY(client.resetAccumulation());
+  const QImage frame = renderWorkerUntilImageReady(client);
+  QVERIFY(!frame.isNull());
+  QCOMPARE(frame.width(), 96);
+  QCOMPARE(frame.height(), 72);
   client.stop();
 #endif
 }

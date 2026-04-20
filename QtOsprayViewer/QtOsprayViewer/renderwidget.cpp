@@ -2,6 +2,9 @@
 
 #include "renderworkerclient.h"
 #include "qualitysettings.h"
+#include "renderreplaylogic.h"
+#include "renderworkflowlogic.h"
+#include "renderworkerqueuelogic.h"
 
 #include <QMetaObject>
 #include <QPainter>
@@ -37,7 +40,7 @@ RenderWidget::RenderWidget(QWidget *parent) : QOpenGLWidget(parent)
   setMouseTracking(true);
   setFocusPolicy(Qt::StrongFocus);
   workerRequestStart_ = std::chrono::steady_clock::now();
-  workerPendingSettings_ = workerSettings_;
+  workerPendingCommands_.settingsState = workerSettings_;
   startWorkerPolling();
 }
 
@@ -1369,14 +1372,23 @@ void RenderWidget::resetView()
 
 void RenderWidget::rebuildSceneAndResetView()
 {
-  if (sceneLoadInProgress_.load())
+  const auto decision = ibrt::renderworkflow::decideRebuildAction(
+      {sceneLoadInProgress_.load(),
+          usingWorkerRenderPath(),
+          renderWorkerClient_ && renderWorkerClient_->isConnected(),
+          currentSceneIsObj_,
+          currentModelPath_,
+          currentBrlcadPath_,
+          currentBrlcadObject_});
+
+  if (decision.action == ibrt::renderworkflow::RebuildAction::None)
     return;
 
-  if (usingWorkerRenderPath()) {
+  if (decision.action == ibrt::renderworkflow::RebuildAction::RestartWorker) {
     restartWorkerAndReplayState();
     if (!renderWorkerClient_ || !renderWorkerClient_->isConnected())
       return;
-  } else if (currentSceneIsObj_ && !currentModelPath_.isEmpty()) {
+  } else if (decision.action == ibrt::renderworkflow::RebuildAction::ReloadObj) {
     const bool ok = backend_.loadObj(currentModelPath_.toStdString());
     if (!ok) {
       lastError_ = QString::fromStdString(backend_.lastError());
@@ -1384,11 +1396,9 @@ void RenderWidget::rebuildSceneAndResetView()
       return;
     }
     backend_.resize(width(), height());
-  } else if (!currentBrlcadPath_.isEmpty()) {
-    const QString objectName =
-        currentBrlcadObject_.trimmed().isEmpty() ? QStringLiteral("all") : currentBrlcadObject_;
+  } else if (decision.action == ibrt::renderworkflow::RebuildAction::ReloadBrlcad) {
     const bool ok = backend_.loadBrlcad(
-        currentBrlcadPath_.toStdString(), objectName.toStdString());
+        currentBrlcadPath_.toStdString(), decision.brlcadObjectName.toStdString());
     if (!ok) {
       lastError_ = QString::fromStdString(backend_.lastError());
       update();
@@ -1397,7 +1407,8 @@ void RenderWidget::rebuildSceneAndResetView()
     backend_.resize(width(), height());
   }
 
-  resetView();
+  if (decision.shouldResetView)
+    resetView();
 }
 
 // Switches between orbit and fly navigation while preserving the visible view.
@@ -1815,32 +1826,44 @@ void RenderWidget::setRenderWorkerClient(RenderWorkerClient *client)
 // Re-sends current viewport state to a newly connected worker.
 void RenderWidget::replayWorkerState()
 {
-  if (!usingWorkerRenderPath())
+  const auto plan = ibrt::renderreplay::buildReplayPlan(
+      {usingWorkerRenderPath(),
+          width(),
+          height(),
+          currentRenderer_,
+          currentSceneIsObj_,
+          currentModelPath_,
+          currentBrlcadPath_,
+          currentBrlcadObject_});
+
+  if (!plan.shouldReplay)
     return;
 
-  queueWorkerResize(width(), height());
-  queueWorkerRenderer(currentRenderer_);
+  queueWorkerResize(plan.width, plan.height);
+  queueWorkerRenderer(plan.renderer);
   queueWorkerSettings(workerSettings_);
 
-  if (currentSceneIsObj_ && !currentModelPath_.isEmpty()) {
-    const auto result = renderWorkerClient_->loadObj(currentModelPath_);
+  if (plan.sceneType == ibrt::renderreplay::SceneReplayType::Obj) {
+    const auto result = renderWorkerClient_->loadObj(plan.scenePath);
     if (result.success) {
       sceneBoundsMin_ = result.boundsMin;
       sceneBoundsMax_ = result.boundsMax;
     }
-  } else if (!currentBrlcadPath_.isEmpty()) {
-    const QString objectName =
-        currentBrlcadObject_.trimmed().isEmpty() ? QStringLiteral("all") : currentBrlcadObject_;
-    const auto result = renderWorkerClient_->loadBrlcad(currentBrlcadPath_, objectName);
+  } else if (plan.sceneType == ibrt::renderreplay::SceneReplayType::Brlcad) {
+    const auto result =
+        renderWorkerClient_->loadBrlcad(plan.scenePath, plan.brlcadObjectName);
     if (result.success) {
       sceneBoundsMin_ = result.boundsMin;
       sceneBoundsMax_ = result.boundsMax;
     }
   }
 
-  syncCameraToBackend();
-  resetAccumulationTargets();
-  renderOnce();
+  if (plan.shouldSyncCamera)
+    syncCameraToBackend();
+  if (plan.shouldResetAccumulation)
+    resetAccumulationTargets();
+  if (plan.shouldRenderOnce)
+    renderOnce();
 }
 
 // Runs a scene-loading task on a background thread and updates UI status text.
@@ -1888,51 +1911,26 @@ void RenderWidget::workerPollingLoop()
       continue;
     }
 
-    bool pendingResize = false;
-    int pendingWidth = 1;
-    int pendingHeight = 1;
-    bool pendingCamera = false;
-    vec3f pendingEye;
-    vec3f pendingCenter;
-    vec3f pendingUp;
-    float pendingFovy = 60.0f;
-    bool pendingResetAccumulation = false;
-    bool pendingRenderer = false;
-    QString pendingRendererType;
-    bool pendingSettings = false;
-    RenderWorkerClient::RenderSettingsState pendingSettingsState;
+    ibrt::renderworkerqueue::PendingCommands pendingCommands;
 
     {
       std::lock_guard<std::mutex> lock(workerStateMutex_);
-      pendingResize = workerPendingResize_;
-      pendingWidth = workerPendingWidth_;
-      pendingHeight = workerPendingHeight_;
-      pendingCamera = workerPendingCamera_;
-      pendingEye = workerPendingEye_;
-      pendingCenter = workerPendingCenter_;
-      pendingUp = workerPendingUp_;
-      pendingFovy = workerPendingFovyDeg_;
-      pendingResetAccumulation = workerPendingResetAccumulation_;
-      pendingRenderer = workerPendingRendererChange_;
-      pendingRendererType = workerPendingRenderer_;
-      pendingSettings = workerPendingSettingsChange_;
-      pendingSettingsState = workerPendingSettings_;
-      workerPendingResize_ = false;
-      workerPendingCamera_ = false;
-      workerPendingResetAccumulation_ = false;
-      workerPendingRendererChange_ = false;
-      workerPendingSettingsChange_ = false;
+      pendingCommands = ibrt::renderworkerqueue::drain(workerPendingCommands_);
     }
 
-    if (pendingResize)
-      renderWorkerClient_->resize(pendingWidth, pendingHeight);
-    if (pendingRenderer)
-      renderWorkerClient_->setRenderer(pendingRendererType);
-    if (pendingSettings)
-      renderWorkerClient_->setRenderSettings(pendingSettingsState);
-    if (pendingCamera)
-      renderWorkerClient_->setCamera(pendingEye, pendingCenter, pendingUp, pendingFovy);
-    if (pendingResetAccumulation)
+    if (pendingCommands.resize)
+      renderWorkerClient_->resize(pendingCommands.width, pendingCommands.height);
+    if (pendingCommands.renderer)
+      renderWorkerClient_->setRenderer(pendingCommands.rendererType);
+    if (pendingCommands.settings)
+      renderWorkerClient_->setRenderSettings(pendingCommands.settingsState);
+    if (pendingCommands.camera) {
+      renderWorkerClient_->setCamera(pendingCommands.eye,
+          pendingCommands.center,
+          pendingCommands.up,
+          pendingCommands.fovyDeg);
+    }
+    if (pendingCommands.resetAccumulation)
       renderWorkerClient_->resetAccumulation();
 
     if (!workerPollRunning_.load() || !renderWorkerClient_->isConnected()) {
@@ -1977,40 +1975,33 @@ void RenderWidget::workerPollingLoop()
 void RenderWidget::queueWorkerResize(int w, int h)
 {
   std::lock_guard<std::mutex> lock(workerStateMutex_);
-  workerPendingResize_ = true;
-  workerPendingWidth_ = std::max(1, w);
-  workerPendingHeight_ = std::max(1, h);
+  ibrt::renderworkerqueue::queueResize(workerPendingCommands_, w, h);
 }
 
 void RenderWidget::queueWorkerCameraUpdate(
     const vec3f &eye, const vec3f &center, const vec3f &up, float fovyDeg)
 {
   std::lock_guard<std::mutex> lock(workerStateMutex_);
-  workerPendingCamera_ = true;
-  workerPendingEye_ = eye;
-  workerPendingCenter_ = center;
-  workerPendingUp_ = up;
-  workerPendingFovyDeg_ = fovyDeg;
+  ibrt::renderworkerqueue::queueCamera(
+      workerPendingCommands_, eye, center, up, fovyDeg);
 }
 
 void RenderWidget::queueWorkerResetAccumulation()
 {
   std::lock_guard<std::mutex> lock(workerStateMutex_);
-  workerPendingResetAccumulation_ = true;
+  ibrt::renderworkerqueue::queueResetAccumulation(workerPendingCommands_);
 }
 
 void RenderWidget::queueWorkerRenderer(const QString &rendererType)
 {
   std::lock_guard<std::mutex> lock(workerStateMutex_);
-  workerPendingRendererChange_ = true;
-  workerPendingRenderer_ = rendererType;
+  ibrt::renderworkerqueue::queueRenderer(workerPendingCommands_, rendererType);
 }
 
 void RenderWidget::queueWorkerSettings(const RenderWorkerClient::RenderSettingsState &settings)
 {
   std::lock_guard<std::mutex> lock(workerStateMutex_);
-  workerPendingSettings_ = settings;
-  workerPendingSettingsChange_ = true;
+  ibrt::renderworkerqueue::queueSettings(workerPendingCommands_, settings);
 }
 
 void RenderWidget::applyLatestWorkerFrame()
@@ -2067,13 +2058,10 @@ float RenderWidget::workerBusySeconds() const
 
 bool RenderWidget::preemptWorkerControlIfBusy()
 {
-  if (!usingWorkerRenderPath())
+  if (!ibrt::renderworkflow::shouldPreemptWorkerControl(
+          usingWorkerRenderPath(), workerBusySeconds())) {
     return false;
-
-  // Worker IPC is strictly request/response over one pipe. If a frame request
-  // is hung, UI-issued control messages will never be serviced behind it.
-  if (workerBusySeconds() <= 0.5f)
-    return false;
+  }
 
   restartWorkerAndReplayState();
   return true;
