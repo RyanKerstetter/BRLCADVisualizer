@@ -415,6 +415,8 @@ void RenderWidget::beginInteraction()
   if (!interactionActive_) {
     interactionActive_ = true;
     backend_.setInteracting(true);
+    if (usingWorkerRenderPath())
+      queueWorkerInteraction(true);
   }
 
   interactionDebounceTimer_->start(kInteractionDebounceMs);
@@ -436,6 +438,8 @@ void RenderWidget::finishInteraction()
 
   interactionActive_ = false;
   backend_.setInteracting(false);
+  if (usingWorkerRenderPath())
+    queueWorkerInteraction(false);
 }
 
 // Reports whether a key participates in fly-camera movement.
@@ -1711,6 +1715,8 @@ void RenderWidget::focusOutEvent(QFocusEvent *e)
   moveUpKeyDown_ = false;
   if (!sceneLoadInProgress_.load())
     backend_.setInteracting(false);
+  if (usingWorkerRenderPath())
+    queueWorkerInteraction(false);
   update();
 }
 
@@ -1869,6 +1875,8 @@ void RenderWidget::workerPollingLoop()
       renderWorkerClient_->setRenderer(pendingCommands.rendererType);
     if (pendingCommands.settings)
       renderWorkerClient_->setRenderSettings(pendingCommands.settingsState);
+    if (pendingCommands.interaction)
+      renderWorkerClient_->setInteracting(pendingCommands.interacting);
     if (pendingCommands.camera) {
       renderWorkerClient_->setCamera(pendingCommands.eye,
           pendingCommands.center,
@@ -1935,6 +1943,12 @@ void RenderWidget::queueWorkerResetAccumulation()
 {
   std::lock_guard<std::mutex> lock(workerStateMutex_);
   ibrt::renderworkerqueue::queueResetAccumulation(workerPendingCommands_);
+}
+
+void RenderWidget::queueWorkerInteraction(bool interacting)
+{
+  std::lock_guard<std::mutex> lock(workerStateMutex_);
+  ibrt::renderworkerqueue::queueInteraction(workerPendingCommands_, interacting);
 }
 
 void RenderWidget::queueWorkerRenderer(const QString &rendererType)

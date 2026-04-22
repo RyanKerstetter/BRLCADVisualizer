@@ -27,7 +27,8 @@ enum class MessageType : uint32_t
   RequestFrame = 13,
   FrameData = 14,
   SetRenderer = 15,
-  SetRenderSettings = 16
+  SetRenderSettings = 16,
+  SetInteracting = 17
 };
 
 struct MessageHeader

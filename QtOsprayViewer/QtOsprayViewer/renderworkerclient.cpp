@@ -370,6 +370,21 @@ bool RenderWorkerClient::setRenderSettings(const RenderSettingsState &settings)
 #endif
 }
 
+// Updates the worker backend's interactive-preview state.
+bool RenderWorkerClient::setInteracting(bool interacting)
+{
+#ifndef _WIN32
+  Q_UNUSED(interacting);
+  return false;
+#else
+  const uint32_t value = interacting ? 1u : 0u;
+  std::string response;
+  return sendRequestBytes(static_cast<uint32_t>(ibrt::ipc::MessageType::SetInteracting),
+      std::string(reinterpret_cast<const char *>(&value), sizeof(value)),
+      &response);
+#endif
+}
+
 // Requests the latest rendered frame from the worker and decodes the response.
 RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
 {
@@ -540,7 +555,8 @@ bool RenderWorkerClient::sendRequestBytes(
           || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetCamera)
           || type == static_cast<uint32_t>(ibrt::ipc::MessageType::ResetAccumulation)
           || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderer)
-          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderSettings))
+          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderSettings)
+          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetInteracting))
       && response.type != ibrt::ipc::MessageType::LoadResult) {
     lastError_ = QStringLiteral("Unexpected response to render control request.");
     return false;
