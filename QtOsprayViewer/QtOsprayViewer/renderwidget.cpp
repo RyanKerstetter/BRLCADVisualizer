@@ -862,79 +862,19 @@ void RenderWidget::paintGL()
     }
     ImGui::PopItemWidth();
 
-    // ---- AO + Auto Performance ----
-
-    float sceneExtent = sceneBoundsMaxExtent();
-    if (sceneExtent < 0.001f)
-      sceneExtent = 1.0f;
-
-    float camDist = length(currentCameraPosition() - center_);
-
-    // Base AO distance (camera + scene scaled)
-    float dynamicAODistance =
-        clampf(camDist * 0.2f, sceneExtent * 0.01f, sceneExtent * 0.1f);
-
-    // --- Smoothing ---
-    static float prevAODistance = dynamicAODistance;
-    dynamicAODistance = 0.9f * prevAODistance + 0.1f * dynamicAODistance;
-    prevAODistance = dynamicAODistance;
-
-    // --- Interaction-based reduction ---
-    if (interactionActive_) {
-      dynamicAODistance *= 0.5f;
-      aoSamples = std::max(0, aoSamples - 1);
-    }
-
-    // --- Frame-time adaptive performance ---
-    float frameTime = usingWorkerRenderPath() ? workerLastFrameTimeMs_
-                                              : backend_.lastFrameTimeMs();
-
-    if (frameTime > 25.0f) {
-      dynamicAODistance *= 0.7f;
-      aoSamples = std::max(0, aoSamples - 1);
-    } else if (frameTime < 12.0f) {
-      dynamicAODistance *= 1.1f;
-    }
-
-    // --- Hollow geometry protection (hard clamp) ---
-    float maxAO = sceneExtent * 0.08f;
-    dynamicAODistance = std::min(dynamicAODistance, maxAO);
-
-    // --- Worker stall handling ---
-    if (usingWorkerRenderPath() && workerBusySeconds() > 0.5f) {
-      dynamicAODistance *= 0.6f;
-    }
-
-    // --- Prevent AO explosion (distance vs samples) ---
-    if (dynamicAODistance > sceneExtent * 0.07f) {
-      aoSamples = std::max(1, aoSamples - 1);
-    }
-
-    // ---- Apply to UI / Backend ----
-
-    // Start from current value
     float aoDistance = usingWorkerRenderPath()
         ? workerSettings_.customAoDistance
         : backend_.customAoDistance();
 
     pushWidthForInlineLabel("AO Distance Limit");
-
-    // UI slider
-    bool changed = ImGui::DragFloat(
-        "AO Distance Limit", &aoDistance, 0.1f, 0.0f, 1000000.0f, "%.1f");
-
-    // If user NOT interacting with slider → override with auto value
-    if (!ImGui::IsItemActive()) {
-      aoDistance = dynamicAODistance;
-      changed = true;
-    }
-
-    // Apply changes
-    if (changed) {
-      if (usingWorkerRenderPath())
+    if (ImGui::DragFloat(
+            "AO Distance Limit", &aoDistance, 0.1f, 0.0f, 1000000.0f, "%.1f")) {
+      if (usingWorkerRenderPath()) {
         workerSettings_.customAoDistance = aoDistance;
-      else
+      } else {
         backend_.setAoDistance(aoDistance);
+        mirrorBackendSettingsToWorkerState();
+      }
 
       settingsChanged = true;
     }
@@ -1349,6 +1289,11 @@ void RenderWidget::resetView()
 {
   if (sceneLoadInProgress_.load())
     return;
+
+  if (inputMode_ != InputMode::Orbit) {
+    inputMode_ = InputMode::Orbit;
+    emit inputModeChanged(inputMode_);
+  }
 
   // Reframe around the current scene bounds and rebuild both orbit and fly
   // camera state from the same canonical view.

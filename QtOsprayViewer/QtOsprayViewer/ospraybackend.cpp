@@ -282,21 +282,10 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
       renderPhase_ = RenderPhase::Progressive;
       setProgressiveScale(16);
     }
-    const int backoffAo = std::max(0, interactionAo - aoBackoffSteps_);
-    const int effectiveAoSamples = (passScale_ > 1) ? 0 : backoffAo;
-    const float effectiveAoDistance = configuredAoDistanceForCurrentMode();
-    const int effectivePixelSamples =
-        (passScale_ > 1) ? 1 : std::max(1, interactionPixel);
-    const int effectiveMaxPathLength = configuredMaxPathLengthForCurrentMode();
-    const int effectiveRoulettePathLength =
-        configuredRoulettePathLengthForCurrentMode();
-    applyRendererSamplingParams(effectiveAoSamples,
-        effectiveAoDistance,
-        effectivePixelSamples,
-        effectiveMaxPathLength,
-        effectiveRoulettePathLength);
-
-    if (!fixedPreviewMode && passScale_ <= 1 && accumFb_.handle() && accumulationEnabled) {
+    const bool willAccumulate =
+        !fixedPreviewMode && passScale_ <= 1 && accumFb_.handle()
+        && accumulationEnabled;
+    if (willAccumulate) {
       if (maxAccumulationFrames > 0
           && accumulatedFrames_ >= uint64_t(maxAccumulationFrames)) {
         return false;
@@ -305,6 +294,24 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
     } else {
       renderPhase_ = RenderPhase::Progressive;
     }
+
+    const int backoffAo = std::max(0, interactionAo - aoBackoffSteps_);
+    const int effectiveAoSamples = (renderPhase_ == RenderPhase::Accumulate)
+        ? configuredAo
+        : ((passScale_ > 1) ? 0 : backoffAo);
+    const float effectiveAoDistance = configuredAoDistanceForCurrentMode();
+    const int effectivePixelSamples =
+        (renderPhase_ == RenderPhase::Accumulate)
+        ? std::max(1, configuredPixel)
+        : ((passScale_ > 1) ? 1 : std::max(1, interactionPixel));
+    const int effectiveMaxPathLength = configuredMaxPathLengthForCurrentMode();
+    const int effectiveRoulettePathLength =
+        configuredRoulettePathLengthForCurrentMode();
+    applyRendererSamplingParams(effectiveAoSamples,
+        effectiveAoDistance,
+        effectivePixelSamples,
+        effectiveMaxPathLength,
+        effectiveRoulettePathLength);
 
     assert(!frameInFlight_);
     startNextRenderWork();
@@ -1472,7 +1479,8 @@ bool OsprayBackend::finishCompletedRender()
   frameInFlight_ = false;
   inFlightStartValid_ = false;
   currentFrame_ = ospray::cpp::Future();
-  applyAoBackoff(watchdogTriggered_);
+  if (renderPhase_ == RenderPhase::Progressive)
+    applyAoBackoff(watchdogTriggered_);
   if (activeRenderRequest_) {
     char reason[64];
     std::snprintf(reason, sizeof(reason), "frameMs=%.2f", lastFrameTimeMs_);
