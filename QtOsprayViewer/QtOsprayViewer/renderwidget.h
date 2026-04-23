@@ -145,7 +145,6 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
       const rkcommon::math::vec3f &up,
       float fovyDeg);
   void queueWorkerResetAccumulation();
-  void queueWorkerInteraction(bool interacting);
   void queueWorkerRenderer(const QString &rendererType);
   void queueWorkerSettings(const RenderWorkerClient::RenderSettingsState &settings);
   void applyLatestWorkerFrame();

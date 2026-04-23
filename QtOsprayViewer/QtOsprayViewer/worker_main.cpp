@@ -242,21 +242,6 @@ int main(int argc, char *argv[])
           pipe, {ibrt::ipc::MessageType::LoadResult, message.requestId, std::string()});
       break;
 
-    case ibrt::ipc::MessageType::SetInteracting: {
-      uint32_t interacting = 0;
-      if (!readPodPayload(message.payload, interacting)) {
-        ibrt::ipc::writeMessage(pipe,
-            {ibrt::ipc::MessageType::Error,
-                message.requestId,
-                "Invalid interaction payload."});
-        break;
-      }
-      backend.setInteracting(interacting != 0);
-      ibrt::ipc::writeMessage(
-          pipe, {ibrt::ipc::MessageType::LoadResult, message.requestId, std::string()});
-      break;
-    }
-
     case ibrt::ipc::MessageType::RequestFrame: {
       // Rendering is incremental: each request asks the backend to advance the
       // current progressive sequence and return the latest display buffer.

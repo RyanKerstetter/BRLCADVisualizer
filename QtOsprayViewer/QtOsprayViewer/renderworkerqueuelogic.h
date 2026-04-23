@@ -22,9 +22,6 @@ struct PendingCommands
 
   bool resetAccumulation = false;
 
-  bool interaction = false;
-  bool interacting = false;
-
   bool renderer = false;
   QString rendererType;
 
@@ -39,7 +36,6 @@ void queueCamera(PendingCommands &commands,
     const rkcommon::math::vec3f &up,
     float fovyDeg);
 void queueResetAccumulation(PendingCommands &commands);
-void queueInteraction(PendingCommands &commands, bool interacting);
 void queueRenderer(PendingCommands &commands, const QString &rendererType);
 void queueSettings(PendingCommands &commands,
     const RenderWorkerClient::RenderSettingsState &settings);

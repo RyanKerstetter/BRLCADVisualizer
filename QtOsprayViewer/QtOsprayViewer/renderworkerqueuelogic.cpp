@@ -29,12 +29,6 @@ void queueResetAccumulation(PendingCommands &commands)
   commands.resetAccumulation = true;
 }
 
-void queueInteraction(PendingCommands &commands, bool interacting)
-{
-  commands.interaction = true;
-  commands.interacting = interacting;
-}
-
 void queueRenderer(PendingCommands &commands, const QString &rendererType)
 {
   commands.renderer = true;
@@ -54,7 +48,6 @@ PendingCommands drain(PendingCommands &commands)
   commands.resize = false;
   commands.camera = false;
   commands.resetAccumulation = false;
-  commands.interaction = false;
   commands.renderer = false;
   commands.settings = false;
   return drained;

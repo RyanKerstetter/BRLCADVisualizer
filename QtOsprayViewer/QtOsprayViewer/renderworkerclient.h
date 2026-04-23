@@ -82,7 +82,6 @@ class RenderWorkerClient : public QObject
   bool resetAccumulation();
   bool setRenderer(const QString &rendererType);
   bool setRenderSettings(const RenderSettingsState &settings);
-  bool setInteracting(bool interacting);
   FrameResult requestFrame();
   bool restart();
 
