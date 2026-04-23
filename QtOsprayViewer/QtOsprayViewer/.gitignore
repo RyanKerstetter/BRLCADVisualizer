@@ -28,3 +28,12 @@ cmake_install.cmake
 # OS
 .DS_Store
 Thumbs.db
+
+# Keep the main generated solution plus packaged runtime artifacts while
+# ignoring the rest of the build tree.
+!build-clean/
+build-clean/*
+!build-clean/IBRT.sln
+!build-clean/IBRT.zip
+!build-clean/IBRT/
+!build-clean/IBRT/**

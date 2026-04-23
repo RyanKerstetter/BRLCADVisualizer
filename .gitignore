@@ -71,3 +71,12 @@ imgui.ini
 /worker_*.obj
 /(BRL-CAD)-*-bomb.log
 /IBRT_crash_*.dmp
+
+# Keep the generated solution plus packaged runtime artifacts for the main
+# viewer build tree. Ignore the rest of the build output.
+!/QtOsprayViewer/QtOsprayViewer/build-clean/
+/QtOsprayViewer/QtOsprayViewer/build-clean/*
+!/QtOsprayViewer/QtOsprayViewer/build-clean/IBRT.sln
+!/QtOsprayViewer/QtOsprayViewer/build-clean/IBRT.zip
+!/QtOsprayViewer/QtOsprayViewer/build-clean/IBRT/
+!/QtOsprayViewer/QtOsprayViewer/build-clean/IBRT/**
