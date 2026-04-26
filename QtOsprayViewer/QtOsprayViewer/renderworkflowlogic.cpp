@@ -9,6 +9,13 @@ bool shouldPreemptWorkerControl(bool usingWorkerRenderPath, float busySeconds)
   return busySeconds > 0.5f;
 }
 
+bool shouldPreemptWorkerInteractiveCamera(bool usingWorkerRenderPath, float busySeconds)
+{
+  if (!usingWorkerRenderPath)
+    return false;
+  return busySeconds > 0.1f;
+}
+
 RebuildDecision decideRebuildAction(const RebuildInputs &inputs)
 {
   RebuildDecision decision;

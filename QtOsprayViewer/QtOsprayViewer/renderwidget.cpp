@@ -382,16 +382,30 @@ void RenderWidget::syncCameraToBackend()
     const vec3f eye = currentCameraPosition();
     const vec3f up = currentCameraUp();
     backend_.setCamera(eye, center_, up, fovy_);
-    if (usingWorkerRenderPath())
+    if (usingWorkerRenderPath()) {
+      if (interactionActive_
+          && ibrt::renderworkflow::shouldPreemptWorkerInteractiveCamera(
+              true, workerBusySeconds())) {
+        restartWorkerAndReplayState();
+        return;
+      }
       queueWorkerCameraUpdate(eye, center_, up, fovy_);
+    }
   } else {
     flyPitch_ = clampf(flyPitch_, -1.4f, 1.4f);
 
     vec3f forward = forwardFromAngles(flyYaw_, flyPitch_);
 
     backend_.setCamera(flyPos_, flyPos_ + forward, worldUp(), fovy_);
-    if (usingWorkerRenderPath())
+    if (usingWorkerRenderPath()) {
+      if (interactionActive_
+          && ibrt::renderworkflow::shouldPreemptWorkerInteractiveCamera(
+              true, workerBusySeconds())) {
+        restartWorkerAndReplayState();
+        return;
+      }
       queueWorkerCameraUpdate(flyPos_, flyPos_ + forward, worldUp(), fovy_);
+    }
   }
 }
 
@@ -415,6 +429,14 @@ void RenderWidget::beginInteraction()
   if (!interactionActive_) {
     interactionActive_ = true;
     backend_.setInteracting(true);
+    if (usingWorkerRenderPath())
+      queueWorkerInteracting(true);
+
+    // The worker pipe is synchronous. If a stale heavy frame is already
+    // blocking the worker, restart once at interaction start so the latest
+    // camera state can replace it instead of waiting for completion.
+    if (usingWorkerRenderPath() && workerBusySeconds() > 0.1f)
+      restartWorkerAndReplayState();
   }
 
   interactionDebounceTimer_->start(kInteractionDebounceMs);
@@ -436,6 +458,8 @@ void RenderWidget::finishInteraction()
 
   interactionActive_ = false;
   backend_.setInteracting(false);
+  if (usingWorkerRenderPath())
+    queueWorkerInteracting(false);
 }
 
 // Reports whether a key participates in fly-camera movement.
@@ -637,11 +661,10 @@ void RenderWidget::paintGL()
   if (usingWorkerRenderPath()) {
     ImGui::Text("Render path: Worker");
     ImGui::Text("Render time: %.2f ms", workerLastFrameTimeMs_);
-    ImGui::Text("Render FPS: %.1f", workerRenderFPS_);
+    ImGui::Text("Render FPS: %.3f", workerRenderFPS_);
+    ImGui::Text("Current scale: %dx", workerCurrentScale_);
     ImGui::Text("Accumulated frames: %llu",
         static_cast<unsigned long long>(workerAccumulatedFrames_));
-    ImGui::Text("Watchdog cancels: %llu",
-        static_cast<unsigned long long>(workerWatchdogCancels_));
     ImGui::Text("AO auto-reductions: %llu",
         static_cast<unsigned long long>(workerAoAutoReductions_));
     const float busySeconds = workerBusySeconds();
@@ -657,11 +680,9 @@ void RenderWidget::paintGL()
     }
   } else {
     ImGui::Text("Render time: %.2f ms", backend_.lastFrameTimeMs());
-    ImGui::Text("Render FPS: %.1f", backend_.renderFPS());
+    ImGui::Text("Render FPS: %.3f", backend_.renderFPS());
     ImGui::Text("Accumulated frames: %llu",
         static_cast<unsigned long long>(backend_.accumulatedFrames()));
-    ImGui::Text("Watchdog cancels: %llu",
-        static_cast<unsigned long long>(backend_.watchdogCancelCount()));
     ImGui::Text("AO auto-reductions: %llu",
         static_cast<unsigned long long>(backend_.aoAutoReductionCount()));
   }
@@ -691,8 +712,11 @@ void RenderWidget::paintGL()
   const auto applyRendererSelection = [this](const QString &rendererName) {
     currentRenderer_ = rendererName;
     if (usingWorkerRenderPath()) {
-      if (preemptWorkerControlIfBusy())
+      if (workerRequestInFlight_.load()) {
+        restartWorkerAndReplayState();
+        update();
         return;
+      }
       queueWorkerRenderer(currentRenderer_);
       resetAccumulationTargets();
       renderOnce();
@@ -742,6 +766,7 @@ void RenderWidget::paintGL()
     settingsChanged = true;
   }
   if (ImGui::RadioButton("Custom", settingsMode == 1)) {
+    seedCustomSettingsFromCurrentAutomatic();
     if (usingWorkerRenderPath())
       workerSettings_.settingsMode = 1;
     else {
@@ -767,15 +792,17 @@ void RenderWidget::paintGL()
     const char *presetLabels[] = {"Fast", "Balanced", "Quality"};
     pushWidthForInlineLabel("Preset");
     if (ImGui::Combo("Preset", &preset, presetLabels, IM_ARRAYSIZE(presetLabels))) {
-      if (usingWorkerRenderPath())
+      if (usingWorkerRenderPath()) {
         workerSettings_.automaticPreset = preset;
-      else {
+        seedCustomSettingsFromCurrentAutomatic();
+      } else {
         if (preset == 0)
           backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Fast);
         else if (preset == 1)
           backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Balanced);
         else
           backend_.setAutomaticPreset(OsprayBackend::AutomaticPreset::Quality);
+        seedCustomSettingsFromCurrentAutomatic();
         mirrorBackendSettingsToWorkerState();
       }
       settingsChanged = true;
@@ -819,10 +846,12 @@ void RenderWidget::paintGL()
   } else {
     ImGui::SeparatorText("Custom");
 
+    const int effectiveScale =
+        usingWorkerRenderPath() ? workerCurrentScale_ : backend_.currentScale();
     int startScale = usingWorkerRenderPath() ? workerSettings_.customStartScale
                                              : backend_.customStartScale();
-    pushWidthForInlineLabel("Start Scale");
-    if (ImGui::SliderInt("Start Scale", &startScale, 1, 16)) {
+    pushWidthForInlineLabel("Configured Start Scale");
+    if (ImGui::SliderInt("Configured Start Scale", &startScale, 1, 16)) {
       if (usingWorkerRenderPath())
         workerSettings_.customStartScale = startScale;
       else {
@@ -832,6 +861,7 @@ void RenderWidget::paintGL()
       settingsChanged = true;
     }
     ImGui::PopItemWidth();
+    ImGui::Text("Effective current scale: %dx", effectiveScale);
 
     float targetMs = usingWorkerRenderPath() ? workerSettings_.customTargetFrameTimeMs
                                              : backend_.customTargetFrameTimeMs();
@@ -851,9 +881,9 @@ void RenderWidget::paintGL()
                                             : backend_.customAoSamples();
     pushWidthForInlineLabel("AO Samples");
     if (ImGui::SliderInt("AO Samples", &aoSamples, 0, 32)) {
-      if (usingWorkerRenderPath())
+      if (usingWorkerRenderPath()) {
         workerSettings_.customAoSamples = aoSamples;
-      else {
+      } else {
         backend_.setAoSamples(aoSamples);
         mirrorBackendSettingsToWorkerState();
       }
@@ -949,19 +979,6 @@ void RenderWidget::paintGL()
     }
     ImGui::PopItemWidth();
 
-    bool lowQualityInteract = usingWorkerRenderPath()
-        ? workerSettings_.customLowQualityWhileInteracting
-        : backend_.customLowQualityWhileInteracting();
-    if (ImGui::Checkbox("Low Quality While Interacting", &lowQualityInteract)) {
-      if (usingWorkerRenderPath())
-        workerSettings_.customLowQualityWhileInteracting = lowQualityInteract;
-      else {
-        backend_.setCustomLowQualityWhileInteracting(lowQualityInteract);
-        mirrorBackendSettingsToWorkerState();
-      }
-      settingsChanged = true;
-    }
-
     bool fullResAccumOnly = usingWorkerRenderPath()
         ? workerSettings_.customFullResAccumulationOnly
         : backend_.customFullResAccumulationOnly();
@@ -974,20 +991,6 @@ void RenderWidget::paintGL()
       }
       settingsChanged = true;
     }
-
-    int watchdogMs = usingWorkerRenderPath() ? workerSettings_.customWatchdogTimeoutMs
-                                             : backend_.customWatchdogTimeoutMs();
-    pushWidthForInlineLabel("Watchdog Timeout (ms)");
-    if (ImGui::InputInt("Watchdog Timeout (ms)", &watchdogMs)) {
-      if (usingWorkerRenderPath())
-        workerSettings_.customWatchdogTimeoutMs = watchdogMs;
-      else {
-        backend_.setCustomWatchdogTimeoutMs(watchdogMs);
-        mirrorBackendSettingsToWorkerState();
-      }
-      settingsChanged = true;
-    }
-    ImGui::PopItemWidth();
 
     if (ImGui::Button("Reset Custom Settings")) {
       if (usingWorkerRenderPath()) {
@@ -1056,7 +1059,9 @@ void RenderWidget::paintGL()
 
   if (settingsChanged) {
     if (usingWorkerRenderPath()) {
-      if (!preemptWorkerControlIfBusy())
+      if (workerRequestInFlight_.load())
+        restartWorkerAndReplayState();
+      else if (!preemptWorkerControlIfBusy())
         queueWorkerSettings(workerSettings_);
     }
     renderOnce();
@@ -1708,8 +1713,11 @@ void RenderWidget::focusOutEvent(QFocusEvent *e)
   moveRightKeyDown_ = false;
   moveDownKeyDown_ = false;
   moveUpKeyDown_ = false;
-  if (!sceneLoadInProgress_.load())
+  if (!sceneLoadInProgress_.load()) {
     backend_.setInteracting(false);
+    if (usingWorkerRenderPath())
+      queueWorkerInteracting(false);
+  }
   update();
 }
 
@@ -1785,6 +1793,7 @@ void RenderWidget::replayWorkerState()
 
   queueWorkerResize(plan.width, plan.height);
   queueWorkerRenderer(plan.renderer);
+  queueWorkerInteracting(interactionActive_);
   queueWorkerSettings(workerSettings_);
 
   if (plan.sceneType == ibrt::renderreplay::SceneReplayType::Obj) {
@@ -1866,6 +1875,8 @@ void RenderWidget::workerPollingLoop()
       renderWorkerClient_->resize(pendingCommands.width, pendingCommands.height);
     if (pendingCommands.renderer)
       renderWorkerClient_->setRenderer(pendingCommands.rendererType);
+    if (pendingCommands.interacting)
+      renderWorkerClient_->setInteracting(pendingCommands.interactingState);
     if (pendingCommands.settings)
       renderWorkerClient_->setRenderSettings(pendingCommands.settingsState);
     if (pendingCommands.camera) {
@@ -1900,6 +1911,7 @@ void RenderWidget::workerPollingLoop()
       pendingWorkerImage_ = frame.image;
       pendingWorkerFrameTimeMs_ = frame.frameTimeMs;
       pendingWorkerRenderFPS_ = frame.renderFPS;
+      pendingWorkerCurrentScale_ = frame.currentScale;
       pendingWorkerAccumulatedFrames_ = frame.accumulatedFrames;
       pendingWorkerWatchdogCancels_ = frame.watchdogCancels;
       pendingWorkerAoAutoReductions_ = frame.aoAutoReductions;
@@ -1942,6 +1954,12 @@ void RenderWidget::queueWorkerRenderer(const QString &rendererType)
   ibrt::renderworkerqueue::queueRenderer(workerPendingCommands_, rendererType);
 }
 
+void RenderWidget::queueWorkerInteracting(bool interacting)
+{
+  std::lock_guard<std::mutex> lock(workerStateMutex_);
+  ibrt::renderworkerqueue::queueInteracting(workerPendingCommands_, interacting);
+}
+
 void RenderWidget::queueWorkerSettings(const RenderWorkerClient::RenderSettingsState &settings)
 {
   std::lock_guard<std::mutex> lock(workerStateMutex_);
@@ -1956,6 +1974,7 @@ void RenderWidget::applyLatestWorkerFrame()
   QImage image;
   float frameTimeMs = 0.0f;
   float renderFPS = 0.0f;
+  int currentScale = 1;
   uint64_t accumulatedFrames = 0;
   uint64_t watchdogCancels = 0;
   uint64_t aoAutoReductions = 0;
@@ -1966,6 +1985,7 @@ void RenderWidget::applyLatestWorkerFrame()
     image = pendingWorkerImage_;
     frameTimeMs = pendingWorkerFrameTimeMs_;
     renderFPS = pendingWorkerRenderFPS_;
+    currentScale = pendingWorkerCurrentScale_;
     accumulatedFrames = pendingWorkerAccumulatedFrames_;
     watchdogCancels = pendingWorkerWatchdogCancels_;
     aoAutoReductions = pendingWorkerAoAutoReductions_;
@@ -1978,6 +1998,7 @@ void RenderWidget::applyLatestWorkerFrame()
   image_ = image;
   workerLastFrameTimeMs_ = frameTimeMs;
   workerRenderFPS_ = renderFPS;
+  workerCurrentScale_ = currentScale;
   workerAccumulatedFrames_ = accumulatedFrames;
   workerWatchdogCancels_ = watchdogCancels;
   workerAoAutoReductions_ = aoAutoReductions;
@@ -2053,6 +2074,8 @@ void RenderWidget::restartWorkerAndReplayState()
   if (!renderWorkerClient_ || workerRestartInProgress_.exchange(true))
     return;
 
+  if (workerRequestInFlight_.load())
+    renderWorkerClient_->stop();
   stopWorkerPolling();
   workerRequestInFlight_.store(false);
   workerFrameReady_.store(false);

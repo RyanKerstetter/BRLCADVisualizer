@@ -271,17 +271,12 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
     const bool accumulationEnabled = accumulationEnabledForCurrentMode();
     const int maxAccumulationFrames = maxAccumulationFramesForCurrentMode();
     const bool fullResAccumOnly = fullResAccumulationOnlyForCurrentMode();
-    const bool lowQualityOnInteract = lowQualityWhileInteractingForCurrentMode();
     const int configuredAo = configuredAoSamplesForCurrentMode();
     const int configuredPixel = configuredPixelSamplesForCurrentMode();
-    const bool fixedPreviewMode = isInteracting_ && lowQualityOnInteract;
-    const int interactionAo = fixedPreviewMode ? 0 : configuredAo;
-    const int interactionPixel = fixedPreviewMode ? 1 : configuredPixel;
+    const bool fixedPreviewMode = false;
+    const int interactionAo = configuredAo;
+    const int interactionPixel = configuredPixel;
     dynamicModeActive_ = (settingsMode_ == SettingsMode::Automatic);
-    if (fixedPreviewMode) {
-      renderPhase_ = RenderPhase::Progressive;
-      setProgressiveScale(16);
-    }
     const bool willAccumulate =
         !fixedPreviewMode && passScale_ <= 1 && accumFb_.handle()
         && accumulationEnabled;
@@ -731,11 +726,6 @@ const std::string &OsprayBackend::currentRenderer() const
 // Sets ambient-occlusion sampling for the current rendering mode.
 void OsprayBackend::setAoSamples(int samples)
 {
-  if (frameInFlight_) {
-    setError("AO sample update ignored while render is in flight.");
-    return;
-  }
-
   const int clamped = std::clamp(samples, 0, kMaxSafeAoSamples);
   if (customAoSamples_ == clamped)
     return;
@@ -1447,10 +1437,7 @@ bool OsprayBackend::finishCompletedRender()
 
   currentFrame_.wait(OSP_FRAME_FINISHED);
   lastFrameTimeMs_ = currentFrame_.duration() * 1000.0f;
-  watchdogTriggered_ =
-      (lastFrameTimeMs_ >= float(watchdogTimeoutForCurrentMode()));
-  if (watchdogTriggered_)
-    ++watchdogCancelCount_;
+  watchdogTriggered_ = false;
 
   bool updatedImage = false;
 
@@ -1480,7 +1467,7 @@ bool OsprayBackend::finishCompletedRender()
   inFlightStartValid_ = false;
   currentFrame_ = ospray::cpp::Future();
   if (renderPhase_ == RenderPhase::Progressive)
-    applyAoBackoff(watchdogTriggered_);
+    applyAoBackoff(false);
   if (activeRenderRequest_) {
     char reason[64];
     std::snprintf(reason, sizeof(reason), "frameMs=%.2f", lastFrameTimeMs_);
@@ -1530,8 +1517,7 @@ void OsprayBackend::applyPendingState()
     camera_.setParam("fovy", pendingCameraState_->fovyDeg);
     cameraDirty_ = true;
     pendingCameraState_.reset();
-    if (!isInteracting_)
-      pendingResetAccumulation_ = true;
+    pendingResetAccumulation_ = true;
   }
 
   if (pendingResetAccumulation_) {
@@ -1611,7 +1597,7 @@ uint64_t OsprayBackend::accumulatedFrames() const
   return accumulatedFrames_;
 }
 
-// Returns how many frames were cancelled by the render watchdog.
+// Returns how many frames were actually cancelled by the render watchdog.
 uint64_t OsprayBackend::watchdogCancelCount() const
 {
   return watchdogCancelCount_;

@@ -27,6 +27,7 @@ class RenderWorkerClient : public QObject
     float frameTimeMs = 0.0f;
     bool updated = false;
     float renderFPS = 0.0f;
+    int currentScale = 1;
     uint64_t accumulatedFrames = 0;
     uint64_t watchdogCancels = 0;
     uint64_t aoAutoReductions = 0;
@@ -56,7 +57,7 @@ class RenderWorkerClient : public QObject
     int customRoulettePathLength = 5;
     bool customAccumulationEnabled = true;
     int customMaxAccumulationFrames = 0;
-    bool customLowQualityWhileInteracting = true;
+    bool customLowQualityWhileInteracting = false;
     bool customFullResAccumulationOnly = true;
     int customWatchdogTimeoutMs = 1500;
   };
@@ -82,6 +83,7 @@ class RenderWorkerClient : public QObject
   bool resetAccumulation();
   bool setRenderer(const QString &rendererType);
   bool setRenderSettings(const RenderSettingsState &settings);
+  bool setInteracting(bool interacting);
   FrameResult requestFrame();
   bool restart();
 

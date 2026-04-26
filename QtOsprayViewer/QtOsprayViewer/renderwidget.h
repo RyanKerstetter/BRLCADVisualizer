@@ -146,6 +146,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
       float fovyDeg);
   void queueWorkerResetAccumulation();
   void queueWorkerRenderer(const QString &rendererType);
+  void queueWorkerInteracting(bool interacting);
   void queueWorkerSettings(const RenderWorkerClient::RenderSettingsState &settings);
   void applyLatestWorkerFrame();
   float workerBusySeconds() const;
@@ -216,6 +217,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   QString loadStatusText_;
   float workerLastFrameTimeMs_ = 0.0f;
   float workerRenderFPS_ = 0.0f;
+  int workerCurrentScale_ = 1;
   uint64_t workerAccumulatedFrames_ = 0;
   uint64_t workerWatchdogCancels_ = 0;
   uint64_t workerAoAutoReductions_ = 0;
@@ -231,6 +233,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   QImage pendingWorkerImage_;
   float pendingWorkerFrameTimeMs_ = 0.0f;
   float pendingWorkerRenderFPS_ = 0.0f;
+  int pendingWorkerCurrentScale_ = 1;
   uint64_t pendingWorkerAccumulatedFrames_ = 0;
   uint64_t pendingWorkerWatchdogCancels_ = 0;
   uint64_t pendingWorkerAoAutoReductions_ = 0;

@@ -43,6 +43,7 @@ class IbrtTests : public QObject
   void unitWorkerIpcPipeNameUsesProcessId();
   void unitWorkerIpcRoundTripMessage();
   void unitRenderWorkflowShouldPreemptWorkerControl();
+  void unitRenderWorkflowShouldPreemptWorkerInteractiveCamera();
   void unitRenderWorkflowDecidesRebuildAction();
   void unitRenderWorkerQueueCoalescesLatestCommands();
   void unitRenderWorkerQueueDrainClearsOneShotFlags();
@@ -847,7 +848,7 @@ void IbrtTests::unitQualitySettingsSeedWorkerStateFromAutomatic()
   QCOMPARE(settings.customMaxPathLength, 20);
   QCOMPARE(settings.customRoulettePathLength, 5);
   QCOMPARE(settings.customMaxAccumulationFrames, 0);
-  QCOMPARE(settings.customLowQualityWhileInteracting, true);
+  QCOMPARE(settings.customLowQualityWhileInteracting, false);
   QCOMPARE(settings.customFullResAccumulationOnly, true);
 }
 
@@ -997,6 +998,16 @@ void IbrtTests::unitRenderWorkflowShouldPreemptWorkerControl()
   QVERIFY(ibrt::renderworkflow::shouldPreemptWorkerControl(true, 0.51f));
 }
 
+void IbrtTests::unitRenderWorkflowShouldPreemptWorkerInteractiveCamera()
+{
+  QVERIFY(!ibrt::renderworkflow::shouldPreemptWorkerInteractiveCamera(
+      false, 10.0f));
+  QVERIFY(!ibrt::renderworkflow::shouldPreemptWorkerInteractiveCamera(
+      true, 0.1f));
+  QVERIFY(ibrt::renderworkflow::shouldPreemptWorkerInteractiveCamera(
+      true, 0.11f));
+}
+
 void IbrtTests::unitRenderWorkflowDecidesRebuildAction()
 {
   using ibrt::renderworkflow::RebuildAction;
@@ -1069,6 +1080,11 @@ void IbrtTests::unitRenderWorkerQueueCoalescesLatestCommands()
   QCOMPARE(commands.renderer, true);
   QCOMPARE(commands.rendererType, QStringLiteral("scivis"));
 
+  ibrt::renderworkerqueue::queueInteracting(commands, true);
+  ibrt::renderworkerqueue::queueInteracting(commands, false);
+  QCOMPARE(commands.interacting, true);
+  QCOMPARE(commands.interactingState, false);
+
   RenderWorkerClient::RenderSettingsState settings;
   settings.customStartScale = 4;
   ibrt::renderworkerqueue::queueSettings(commands, settings);
@@ -1101,12 +1117,15 @@ void IbrtTests::unitRenderWorkerQueueDrainClearsOneShotFlags()
   ibrt::renderworkerqueue::PendingCommands commands;
   ibrt::renderworkerqueue::queueResize(commands, 64, 64);
   ibrt::renderworkerqueue::queueRenderer(commands, QStringLiteral("ao"));
+  ibrt::renderworkerqueue::queueInteracting(commands, true);
   ibrt::renderworkerqueue::queueResetAccumulation(commands);
 
   const auto drained = ibrt::renderworkerqueue::drain(commands);
   QCOMPARE(drained.resize, true);
   QCOMPARE(drained.renderer, true);
   QCOMPARE(drained.resetAccumulation, true);
+  QCOMPARE(drained.interacting, true);
+  QCOMPARE(drained.interactingState, true);
   QCOMPARE(drained.width, 64);
   QCOMPARE(drained.rendererType, QStringLiteral("ao"));
 
@@ -1114,6 +1133,7 @@ void IbrtTests::unitRenderWorkerQueueDrainClearsOneShotFlags()
   QCOMPARE(commands.camera, false);
   QCOMPARE(commands.resetAccumulation, false);
   QCOMPARE(commands.renderer, false);
+  QCOMPARE(commands.interacting, false);
   QCOMPARE(commands.settings, false);
 }
 
@@ -1209,6 +1229,12 @@ void IbrtTests::integrationWorkerSmokeTestWorkerLifecycle()
   std::fprintf(stderr, "IBRTTests: pushing settings\n");
   if (!client.setRenderSettings(settings)) {
     std::fprintf(stderr, "IBRTTests: setRenderSettings failed: %s\n",
+        client.lastError().toStdString().c_str());
+    QFAIL(qPrintable(client.lastError()));
+  }
+  std::fprintf(stderr, "IBRTTests: toggling interaction\n");
+  if (!client.setInteracting(true) || !client.setInteracting(false)) {
+    std::fprintf(stderr, "IBRTTests: setInteracting failed: %s\n",
         client.lastError().toStdString().c_str());
     QFAIL(qPrintable(client.lastError()));
   }

@@ -33,7 +33,7 @@ void seedCustomSettingsFromAutomatic(
   settings.customMaxPathLength = defaultSettings.customMaxPathLength;
   settings.customRoulettePathLength = defaultSettings.customRoulettePathLength;
   settings.customMaxAccumulationFrames = 0;
-  settings.customLowQualityWhileInteracting = true;
+  settings.customLowQualityWhileInteracting = false;
   settings.customFullResAccumulationOnly = true;
   settings.customWatchdogTimeoutMs = defaultSettings.customWatchdogTimeoutMs;
 }
@@ -63,7 +63,7 @@ void seedBackendCustomSettingsFromAutomatic(OsprayBackend &backend)
   backend.setCustomTargetFrameTimeMs(backend.automaticTargetFrameTimeMs());
   backend.setCustomAccumulationEnabled(backend.automaticAccumulationEnabled());
   backend.setCustomMaxAccumulationFrames(0);
-  backend.setCustomLowQualityWhileInteracting(true);
+  backend.setCustomLowQualityWhileInteracting(false);
   backend.setCustomFullResAccumulationOnly(true);
   backend.setCustomWatchdogTimeoutMs(defaultSettings.customWatchdogTimeoutMs);
 }

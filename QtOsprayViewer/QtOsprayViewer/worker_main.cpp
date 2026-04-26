@@ -253,6 +253,7 @@ int main(int argc, char *argv[])
         float frameTimeMs;
         float renderFPS;
         uint32_t updated;
+        uint32_t currentScale;
         uint64_t accumulatedFrames;
         uint64_t watchdogCancels;
         uint64_t aoAutoReductions;
@@ -262,6 +263,7 @@ int main(int argc, char *argv[])
           backend.lastFrameTimeMs(),
           backend.renderFPS(),
           updated ? 1u : 0u,
+          static_cast<uint32_t>(backend.currentScale()),
           backend.accumulatedFrames(),
           backend.watchdogCancelCount(),
           backend.aoAutoReductionCount(),
@@ -345,6 +347,19 @@ int main(int argc, char *argv[])
           pipe, {ibrt::ipc::MessageType::LoadResult, message.requestId, std::string()});
       break;
     }
+
+    case ibrt::ipc::MessageType::SetInteracting:
+      if (message.payload.size() != 1) {
+        ibrt::ipc::writeMessage(pipe,
+            {ibrt::ipc::MessageType::Error,
+                message.requestId,
+                "Invalid interacting payload."});
+        break;
+      }
+      backend.setInteracting(message.payload[0] != 0);
+      ibrt::ipc::writeMessage(
+          pipe, {ibrt::ipc::MessageType::LoadResult, message.requestId, std::string()});
+      break;
 
     default:
       ibrt::ipc::writeMessage(pipe,

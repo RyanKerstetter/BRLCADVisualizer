@@ -32,6 +32,7 @@ struct RebuildDecision
 };
 
 bool shouldPreemptWorkerControl(bool usingWorkerRenderPath, float busySeconds);
+bool shouldPreemptWorkerInteractiveCamera(bool usingWorkerRenderPath, float busySeconds);
 RebuildDecision decideRebuildAction(const RebuildInputs &inputs);
 
 } // namespace ibrt::renderworkflow

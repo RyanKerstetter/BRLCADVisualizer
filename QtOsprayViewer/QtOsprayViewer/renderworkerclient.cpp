@@ -370,6 +370,21 @@ bool RenderWorkerClient::setRenderSettings(const RenderSettingsState &settings)
 #endif
 }
 
+// Updates the worker backend's interaction flag so it can render previews while dragging.
+bool RenderWorkerClient::setInteracting(bool interacting)
+{
+#ifndef _WIN32
+  Q_UNUSED(interacting);
+  return false;
+#else
+  const char payload = interacting ? 1 : 0;
+  std::string response;
+  return sendRequestBytes(static_cast<uint32_t>(ibrt::ipc::MessageType::SetInteracting),
+      std::string(&payload, 1),
+      &response);
+#endif
+}
+
 // Requests the latest rendered frame from the worker and decodes the response.
 RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
 {
@@ -393,6 +408,7 @@ RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
     float frameTimeMs;
     float renderFPS;
     uint32_t updated;
+    uint32_t currentScale;
     uint64_t accumulatedFrames;
     uint64_t watchdogCancels;
     uint64_t aoAutoReductions;
@@ -416,6 +432,7 @@ RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
   result.frameTimeMs = header.frameTimeMs;
   result.renderFPS = header.renderFPS;
   result.updated = header.updated != 0;
+  result.currentScale = int(header.currentScale);
   result.accumulatedFrames = header.accumulatedFrames;
   result.watchdogCancels = header.watchdogCancels;
   result.aoAutoReductions = header.aoAutoReductions;
@@ -540,7 +557,8 @@ bool RenderWorkerClient::sendRequestBytes(
           || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetCamera)
           || type == static_cast<uint32_t>(ibrt::ipc::MessageType::ResetAccumulation)
           || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderer)
-          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderSettings))
+          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetRenderSettings)
+          || type == static_cast<uint32_t>(ibrt::ipc::MessageType::SetInteracting))
       && response.type != ibrt::ipc::MessageType::LoadResult) {
     lastError_ = QStringLiteral("Unexpected response to render control request.");
     return false;
