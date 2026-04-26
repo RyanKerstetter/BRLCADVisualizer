@@ -742,7 +742,6 @@ void RenderWidget::paintGL()
     settingsChanged = true;
   }
   if (ImGui::RadioButton("Custom", settingsMode == 1)) {
-    seedCustomSettingsFromCurrentAutomatic();
     if (usingWorkerRenderPath())
       workerSettings_.settingsMode = 1;
     else {
