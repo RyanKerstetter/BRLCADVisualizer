@@ -1,3 +1,6 @@
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
 #pragma once
 
 #include <QString>
@@ -32,6 +35,7 @@ struct RebuildDecision
 };
 
 bool shouldPreemptWorkerControl(bool usingWorkerRenderPath, float busySeconds);
+bool shouldPreemptWorkerInteractiveCamera(bool usingWorkerRenderPath, float busySeconds);
 RebuildDecision decideRebuildAction(const RebuildInputs &inputs);
 
 } // namespace ibrt::renderworkflow

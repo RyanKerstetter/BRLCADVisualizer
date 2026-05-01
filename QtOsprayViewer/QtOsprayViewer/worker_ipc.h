@@ -1,3 +1,6 @@
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
 #pragma once
 
 #include <cstdint>
@@ -9,7 +12,6 @@
 
 namespace ibrt::ipc {
 
-// Message types are shared by the viewer process and the render worker.
 enum class MessageType : uint32_t
 {
   Ping = 1,
@@ -27,12 +29,13 @@ enum class MessageType : uint32_t
   RequestFrame = 13,
   FrameData = 14,
   SetRenderer = 15,
-  SetRenderSettings = 16
+  SetRenderSettings = 16,
+  SetInteracting = 17
 };
 
 struct MessageHeader
 {
-  uint32_t magic = 0x54425249; // IBRT
+  uint32_t magic = 0x54425249;
   uint32_t version = 1;
   uint32_t type = 0;
   uint64_t requestId = 0;
@@ -46,13 +49,14 @@ struct Message
   std::string payload;
 };
 
-// The pipe name is keyed by the UI process ID so a viewer instance talks only
-// to its own worker.
 std::string makePipeName(uint32_t processId);
 
 #ifdef _WIN32
 bool writeMessage(HANDLE pipe, const Message &message);
 bool readMessage(HANDLE pipe, Message &message);
+#elif defined(__linux__)
+bool writeMessage(int fd, const Message &message);
+bool readMessage(int fd, Message &message);
 #endif
 
 } // namespace ibrt::ipc

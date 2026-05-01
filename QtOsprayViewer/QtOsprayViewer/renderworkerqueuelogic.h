@@ -1,3 +1,6 @@
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
 #pragma once
 
 #include <QString>
@@ -25,6 +28,9 @@ struct PendingCommands
   bool renderer = false;
   QString rendererType;
 
+  bool interacting = false;
+  bool interactingState = false;
+
   bool settings = true;
   RenderWorkerClient::RenderSettingsState settingsState;
 };
@@ -37,6 +43,7 @@ void queueCamera(PendingCommands &commands,
     float fovyDeg);
 void queueResetAccumulation(PendingCommands &commands);
 void queueRenderer(PendingCommands &commands, const QString &rendererType);
+void queueInteracting(PendingCommands &commands, bool interacting);
 void queueSettings(PendingCommands &commands,
     const RenderWorkerClient::RenderSettingsState &settings);
 PendingCommands drain(PendingCommands &commands);

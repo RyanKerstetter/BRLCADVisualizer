@@ -1,3 +1,6 @@
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
 #include "mainwindow.h"
 #include "renderwidget.h"
 #include "renderworkerclient.h"
@@ -26,17 +29,16 @@
 #include <QLabel>
 
 namespace {
-// Prefer the common BRL-CAD aggregate names before falling back to the previous
-// user selection or the first discovered object.
 QString defaultBrlcadObject(const QStringList &objects, const QString &currentObject)
 {
-  if (objects.contains(QStringLiteral("all.g")))
-    return QStringLiteral("all.g");
-  if (objects.contains(QStringLiteral("all")))
-    return QStringLiteral("all");
   if (!currentObject.trimmed().isEmpty() && objects.contains(currentObject))
     return currentObject;
   return objects.isEmpty() ? QString() : objects.front();
+}
+
+QString firstBrlcadNodeName(const std::vector<OsprayBackend::BrlcadNode> &roots)
+{
+  return roots.empty() ? QString() : QString::fromStdString(roots.front().name);
 }
 
 QString hierarchyNodeLabel(const OsprayBackend::BrlcadNode &node)
@@ -49,80 +51,6 @@ QString hierarchyNodeLabel(const OsprayBackend::BrlcadNode &node)
   else if (node.isPrimitive)
     label += QStringLiteral(" [solid]");
   return label;
-}
-
-std::vector<OsprayBackend::BrlcadNode> buildSafeHierarchyFromObjectList(const QStringList &objects)
-{
-  // Some databases only expose a flat object list. This synthesizes a minimal
-  // hierarchy so the picker still presents a navigable tree.
-  std::vector<OsprayBackend::BrlcadNode> roots;
-
-  OsprayBackend::BrlcadNode root;
-  root.name = objects.contains(QStringLiteral("all.g")) ? "all.g" : "all";
-  root.isCombination = true;
-
-  auto classifyLeaf = [](const QString &name) {
-    OsprayBackend::BrlcadNode node;
-    node.name = name.toStdString();
-    const QString lower = name.toLower();
-    if (lower.endsWith(QStringLiteral(".r"))) {
-      node.isCombination = true;
-      node.isRegion = true;
-    } else {
-      node.isPrimitive = true;
-    }
-    return node;
-  };
-
-  QStringList remaining = objects;
-  remaining.removeAll(QStringLiteral("all.g"));
-  remaining.removeAll(QStringLiteral("all"));
-  remaining.sort(Qt::CaseInsensitive);
-
-  QSet<QString> consumed;
-
-  for (const QString &name : remaining) {
-    if (consumed.contains(name))
-      continue;
-
-    const QString lower = name.toLower();
-    if (lower.endsWith(QStringLiteral(".r"))) {
-      OsprayBackend::BrlcadNode region = classifyLeaf(name);
-
-      QString solidCandidate = name;
-      solidCandidate.chop(2);
-      solidCandidate += QStringLiteral(".s");
-
-      QString bareCandidate = name;
-      bareCandidate.chop(2);
-
-      if (remaining.contains(solidCandidate, Qt::CaseInsensitive)) {
-        consumed.insert(solidCandidate);
-        region.children.push_back(classifyLeaf(solidCandidate));
-      } else if (remaining.contains(bareCandidate, Qt::CaseInsensitive)) {
-        consumed.insert(bareCandidate);
-        region.children.push_back(classifyLeaf(bareCandidate));
-      }
-
-      root.children.push_back(std::move(region));
-      consumed.insert(name);
-      continue;
-    }
-
-    if (lower.endsWith(QStringLiteral(".s"))) {
-      OsprayBackend::BrlcadNode solid = classifyLeaf(name);
-      root.children.push_back(std::move(solid));
-      consumed.insert(name);
-      continue;
-    }
-
-    OsprayBackend::BrlcadNode node = classifyLeaf(name);
-    root.children.push_back(std::move(node));
-    consumed.insert(name);
-  }
-
-  roots.push_back(std::move(root));
-  return roots;
 }
 
 // Recursively populates a Qt tree item hierarchy from BRL-CAD node data.
@@ -148,8 +76,8 @@ QString chooseBrlcadObjectHierarchy(QWidget *parent,
     const std::vector<OsprayBackend::BrlcadNode> &roots,
     const QString &currentObject)
 {
-  // The BRL-CAD object chooser is intentionally tree-based so users can browse
-  // large databases and filter down to a single selectable top-level object.
+  // The chooser lists real top-level BRL-CAD objects exactly as reported by the
+  // database and applies only lightweight type labels.
   if (roots.empty())
     return QString();
 
@@ -186,12 +114,12 @@ QString chooseBrlcadObjectHierarchy(QWidget *parent,
       populateHierarchyItem(rootItem, child, currentObject, selectedItem);
   }
 
-  tree->expandToDepth(1);
+  if (!selectedItem && tree->topLevelItemCount() > 0)
+    selectedItem = tree->topLevelItem(0);
+
   if (selectedItem) {
     tree->setCurrentItem(selectedItem);
     selectedItem->setSelected(true);
-    for (QTreeWidgetItem *walk = selectedItem->parent(); walk; walk = walk->parent())
-      walk->setExpanded(true);
   }
 
   auto updateSelectionState = [tree, okButton]() {
@@ -273,19 +201,28 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
       this,
       [this](bool connected) {
         if (connected) {
-          statusBar()->showMessage(QStringLiteral("Render worker connected."));
+          statusBar()->showMessage(workerReconnectPending_
+                  ? QStringLiteral("Render worker reconnected.")
+                  : QStringLiteral("Render worker connected."),
+              2000);
+          workerEverConnected_ = true;
+          workerReconnectPending_ = false;
           renderWidget_->replayWorkerState();
           return;
         }
 
-        statusBar()->showMessage(QStringLiteral("Render worker disconnected. Restarting..."));
+        if (!RenderWorkerClient::isSupported())
+          return;
+
+        if (workerEverConnected_)
+          workerReconnectPending_ = true;
+        statusBar()->showMessage(QStringLiteral("Render worker disconnected. Restarting..."), 1500);
         // If the worker dies, try to restore the previous viewport state after
         // reconnecting so the user does not have to manually recover.
         QTimer::singleShot(500, this, [this]() {
           if (renderWorkerClient_->isConnected())
             return;
           if (renderWorkerClient_->restart()) {
-            statusBar()->showMessage(QStringLiteral("Render worker reconnected."));
             renderWidget_->replayWorkerState();
           } else {
             statusBar()->showMessage(
@@ -296,12 +233,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
       });
 
   const QString workerPath =
-      QCoreApplication::applicationDirPath() + QStringLiteral("/IBRTRenderWorker.exe");
-  if (!renderWorkerClient_->start(workerPath)) {
+      RenderWorkerClient::defaultWorkerPath(QCoreApplication::applicationDirPath());
+  if (!RenderWorkerClient::isSupported()) {
+    statusBar()->showMessage(QStringLiteral(
+        "Render worker unavailable on this platform. Using local rendering."));
+  } else if (!renderWorkerClient_->start(workerPath)) {
     statusBar()->showMessage(
         QStringLiteral("Render worker unavailable: %1").arg(renderWorkerClient_->lastError()));
   } else {
-    statusBar()->showMessage(QStringLiteral("Render worker connected."));
+    workerEverConnected_ = true;
+    statusBar()->showMessage(QStringLiteral("Render worker connected."), 2000);
   }
 
   setupMenus();
@@ -388,7 +329,7 @@ void MainWindow::setupMenus()
     }
 
     if (ext == "g") {
-      chooseAndLoadBrlcadObject(path, renderWidget_->listBrlcadObjects(path));
+      chooseAndLoadBrlcadObject(path);
       return;
     }
 
@@ -442,8 +383,7 @@ void MainWindow::setupMenus()
   connect(selectBrlcadObjectAction_, &QAction::triggered, this, [this]() {
     if (!renderWidget_->hasBrlcadScene())
       return;
-    chooseAndLoadBrlcadObject(
-        renderWidget_->currentBrlcadPath(), renderWidget_->currentBrlcadObjects());
+    chooseAndLoadBrlcadObject(renderWidget_->currentBrlcadPath());
   });
 }
 
@@ -474,7 +414,7 @@ void MainWindow::populateDemoModelsMenu(QMenu *menu)
 
     QAction *action = new QAction(QString::fromLatin1(model.label), this);
     connect(action, &QAction::triggered, this, [this, path]() {
-      chooseAndLoadBrlcadObject(path, renderWidget_->listBrlcadObjects(path));
+      chooseAndLoadBrlcadObject(path);
     });
     menu->addAction(action);
     addedAny = true;
@@ -525,7 +465,21 @@ void MainWindow::loadStartupDemo()
   if (path.isEmpty())
     return;
 
-  if (!renderWidget_->loadBrlcadModel(path, QStringLiteral("all.g"))) {
+  const QStringList objects = renderWidget_->listBrlcadObjects(path);
+  const auto roots = renderWidget_->brlcadHierarchy(path);
+  QString obj = defaultBrlcadObject(objects, firstBrlcadNodeName(roots));
+  if (QFileInfo(path).fileName().compare(QStringLiteral("moss.g"), Qt::CaseInsensitive) == 0
+      && objects.contains(QStringLiteral("all.g"))) {
+    obj = QStringLiteral("all.g");
+  }
+
+  if (obj.isEmpty()) {
+    statusBar()->showMessage(QStringLiteral("Startup demo load failed: no BRL-CAD objects found."),
+        5000);
+    return;
+  }
+
+  if (!renderWidget_->loadBrlcadModel(path, obj)) {
     statusBar()->showMessage(QStringLiteral("Startup demo load failed: %1")
                                  .arg(renderWidget_->lastError()),
         5000);
@@ -541,25 +495,20 @@ void MainWindow::updateBrlcadMenuState()
 
 // Prompts for a BRL-CAD object and asks the render widget to load it.
 void MainWindow::chooseAndLoadBrlcadObject(
-    const QString &path, const QStringList &objects)
+    const QString &path)
 {
   if (path.isEmpty())
     return;
 
-  QStringList choices = objects;
-  if (choices.isEmpty()) {
+  const auto roots = renderWidget_->brlcadHierarchy(path);
+  if (roots.empty()) {
     QMessageBox::warning(this,
         "No Objects Found",
         "No selectable BRL-CAD objects were found in this .g file.");
     return;
   }
 
-  const auto hierarchy = buildSafeHierarchyFromObjectList(choices);
-  // Preserve the currently selected object when possible so re-opening the
-  // picker behaves like a refinement step instead of a full reset.
-  QString obj = chooseBrlcadObjectHierarchy(this, hierarchy, renderWidget_->currentBrlcadObject());
-  if (obj.isEmpty())
-    obj = defaultBrlcadObject(choices, renderWidget_->currentBrlcadObject());
+  QString obj = chooseBrlcadObjectHierarchy(this, roots, renderWidget_->currentBrlcadObject());
   if (obj.isEmpty())
     return;
 

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
 #pragma once
 
 #include <QObject>
@@ -20,13 +23,13 @@ class RenderWorkerClient : public QObject
   Q_OBJECT
 
  public:
-  // A frame packet mirrors what the worker returns over the named pipe.
   struct FrameResult
   {
     QImage image;
     float frameTimeMs = 0.0f;
     bool updated = false;
     float renderFPS = 0.0f;
+    int currentScale = 1;
     uint64_t accumulatedFrames = 0;
     uint64_t watchdogCancels = 0;
     uint64_t aoAutoReductions = 0;
@@ -56,7 +59,7 @@ class RenderWorkerClient : public QObject
     int customRoulettePathLength = 5;
     bool customAccumulationEnabled = true;
     int customMaxAccumulationFrames = 0;
-    bool customLowQualityWhileInteracting = true;
+    bool customLowQualityWhileInteracting = false;
     bool customFullResAccumulationOnly = true;
     int customWatchdogTimeoutMs = 1500;
   };
@@ -64,16 +67,17 @@ class RenderWorkerClient : public QObject
   explicit RenderWorkerClient(QObject *parent = nullptr);
   ~RenderWorkerClient() override;
 
-  // Process and IPC lifecycle.
+  static bool isSupported();
+  static QString executableFileName();
+  static QString defaultWorkerPath(const QString &applicationDirPath);
+
   bool start(const QString &workerPath);
   void stop();
   bool isConnected() const;
   QString lastError() const;
-  // Scene-management requests.
   QStringList listBrlcadObjects(const QString &path);
   SceneLoadResult loadObj(const QString &path);
   SceneLoadResult loadBrlcad(const QString &path, const QString &objectName);
-  // Render-control requests.
   bool resize(int width, int height);
   bool setCamera(const rkcommon::math::vec3f &eye,
       const rkcommon::math::vec3f &center,
@@ -82,6 +86,7 @@ class RenderWorkerClient : public QObject
   bool resetAccumulation();
   bool setRenderer(const QString &rendererType);
   bool setRenderSettings(const RenderSettingsState &settings);
+  bool setInteracting(bool interacting);
   FrameResult requestFrame();
   bool restart();
 
@@ -90,8 +95,6 @@ class RenderWorkerClient : public QObject
 
  private:
 #ifdef _WIN32
-  // IPC helpers. All requests are serialized behind requestMutex_ because the
-  // worker protocol is strictly request/response over a single pipe.
   bool connectPipe();
   bool sendPing();
   bool sendRequest(uint32_t type, const QString &payload, QString *responsePayload);
@@ -100,6 +103,15 @@ class RenderWorkerClient : public QObject
       std::string *responsePayload);
   void closePipe();
   HANDLE pipe_ = INVALID_HANDLE_VALUE;
+#elif defined(__linux__)
+  bool connectSocket();
+  bool sendPing();
+  bool sendRequest(uint32_t type, const QString &payload, QString *responsePayload);
+  bool sendRequestBytes(uint32_t type,
+      const std::string &payload,
+      std::string *responsePayload);
+  void closeSocket();
+  int socket_ = -1;
 #endif
   QProcess *process_ = nullptr;
   QString workerPath_;

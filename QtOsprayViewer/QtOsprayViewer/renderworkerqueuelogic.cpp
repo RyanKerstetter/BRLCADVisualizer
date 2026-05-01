@@ -1,3 +1,6 @@
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
 #include "renderworkerqueuelogic.h"
 
 #include <algorithm>
@@ -35,6 +38,12 @@ void queueRenderer(PendingCommands &commands, const QString &rendererType)
   commands.rendererType = rendererType;
 }
 
+void queueInteracting(PendingCommands &commands, bool interacting)
+{
+  commands.interacting = true;
+  commands.interactingState = interacting;
+}
+
 void queueSettings(PendingCommands &commands,
     const RenderWorkerClient::RenderSettingsState &settings)
 {
@@ -49,6 +58,7 @@ PendingCommands drain(PendingCommands &commands)
   commands.camera = false;
   commands.resetAccumulation = false;
   commands.renderer = false;
+  commands.interacting = false;
   commands.settings = false;
   return drained;
 }

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
 #include <QtTest/QtTest>
 
 #include <cstdio>
@@ -43,6 +46,7 @@ class IbrtTests : public QObject
   void unitWorkerIpcPipeNameUsesProcessId();
   void unitWorkerIpcRoundTripMessage();
   void unitRenderWorkflowShouldPreemptWorkerControl();
+  void unitRenderWorkflowShouldPreemptWorkerInteractiveCamera();
   void unitRenderWorkflowDecidesRebuildAction();
   void unitRenderWorkerQueueCoalescesLatestCommands();
   void unitRenderWorkerQueueDrainClearsOneShotFlags();
@@ -653,17 +657,16 @@ void IbrtTests::systemReloadDifferentBrlcadObjectChangesFrame()
 
 void IbrtTests::systemWorkerLoadRenderInteractCycle()
 {
-#ifndef _WIN32
-  QSKIP("Render worker system test is Windows-only.");
-#else
+  if (!RenderWorkerClient::isSupported())
+    QSKIP("Render worker system test is unsupported on this platform.");
   const auto dbPath = makeExampleBrlcadDb();
   if (!dbPath.has_value())
     QSKIP("Generated BRL-CAD fixture database is unavailable.");
 
   const QString workerPath =
-      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+      RenderWorkerClient::defaultWorkerPath(QCoreApplication::applicationDirPath());
   if (!QFileInfo::exists(workerPath))
-    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+    QSKIP("Render worker executable is not present next to the test binary.");
 
   RenderWorkerClient client;
   if (!client.start(workerPath))
@@ -708,22 +711,20 @@ void IbrtTests::systemWorkerLoadRenderInteractCycle()
   QVERIFY(frameA != frameB);
 
   client.stop();
-#endif
 }
 
 void IbrtTests::systemWorkerRendererSwitchChangesFrame()
 {
-#ifndef _WIN32
-  QSKIP("Render worker system test is Windows-only.");
-#else
+  if (!RenderWorkerClient::isSupported())
+    QSKIP("Render worker system test is unsupported on this platform.");
   const auto dbPath = makeExampleBrlcadDb();
   if (!dbPath.has_value())
     QSKIP("Generated BRL-CAD fixture database is unavailable.");
 
   const QString workerPath =
-      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+      RenderWorkerClient::defaultWorkerPath(QCoreApplication::applicationDirPath());
   if (!QFileInfo::exists(workerPath))
-    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+    QSKIP("Render worker executable is not present next to the test binary.");
 
   RenderWorkerClient client;
   if (!client.start(workerPath))
@@ -743,22 +744,20 @@ void IbrtTests::systemWorkerRendererSwitchChangesFrame()
   QVERIFY(aoFrame != sciVisFrame);
 
   client.stop();
-#endif
 }
 
 void IbrtTests::systemWorkerReloadDifferentObjectChangesFrame()
 {
-#ifndef _WIN32
-  QSKIP("Render worker system test is Windows-only.");
-#else
+  if (!RenderWorkerClient::isSupported())
+    QSKIP("Render worker system test is unsupported on this platform.");
   const auto dbPath = makeExampleBrlcadDb();
   if (!dbPath.has_value())
     QSKIP("Generated BRL-CAD fixture database is unavailable.");
 
   const QString workerPath =
-      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+      RenderWorkerClient::defaultWorkerPath(QCoreApplication::applicationDirPath());
   if (!QFileInfo::exists(workerPath))
-    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+    QSKIP("Render worker executable is not present next to the test binary.");
 
   RenderWorkerClient client;
   if (!client.start(workerPath))
@@ -778,22 +777,20 @@ void IbrtTests::systemWorkerReloadDifferentObjectChangesFrame()
   QVERIFY(ballFrame != boxFrame);
 
   client.stop();
-#endif
 }
 
 void IbrtTests::systemWorkerCrashRecovery()
 {
-#ifndef _WIN32
-  QSKIP("Render worker system test is Windows-only.");
-#else
+  if (!RenderWorkerClient::isSupported())
+    QSKIP("Render worker system test is unsupported on this platform.");
   const auto dbPath = makeExampleBrlcadDb();
   if (!dbPath.has_value())
     QSKIP("Generated BRL-CAD fixture database is unavailable.");
 
   const QString workerPath =
-      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+      RenderWorkerClient::defaultWorkerPath(QCoreApplication::applicationDirPath());
   if (!QFileInfo::exists(workerPath))
-    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+    QSKIP("Render worker executable is not present next to the test binary.");
 
   RenderWorkerClient client;
   if (!client.start(workerPath))
@@ -823,7 +820,6 @@ void IbrtTests::systemWorkerCrashRecovery()
   QVERIFY(!secondFrame.isNull());
   QVERIFY(imageHasNonZeroPixel(secondFrame));
   client.stop();
-#endif
 }
 
 void IbrtTests::unitQualitySettingsSeedWorkerStateFromAutomatic()
@@ -847,7 +843,7 @@ void IbrtTests::unitQualitySettingsSeedWorkerStateFromAutomatic()
   QCOMPARE(settings.customMaxPathLength, 20);
   QCOMPARE(settings.customRoulettePathLength, 5);
   QCOMPARE(settings.customMaxAccumulationFrames, 0);
-  QCOMPARE(settings.customLowQualityWhileInteracting, true);
+  QCOMPARE(settings.customLowQualityWhileInteracting, false);
   QCOMPARE(settings.customFullResAccumulationOnly, true);
 }
 
@@ -978,8 +974,16 @@ void IbrtTests::unitInteractionControllerClassifiesDocumentedChords()
 
 void IbrtTests::unitWorkerIpcPipeNameUsesProcessId()
 {
+#ifdef _WIN32
   QCOMPARE(QString::fromStdString(ibrt::ipc::makePipeName(42)),
       QStringLiteral("\\\\.\\pipe\\IBRT.RenderWorker.42"));
+#elif defined(__linux__)
+  QCOMPARE(QString::fromStdString(ibrt::ipc::makePipeName(42)),
+      QStringLiteral("/tmp/ibrt_render_42.sock"));
+#else
+  QCOMPARE(QString::fromStdString(ibrt::ipc::makePipeName(42)),
+      QStringLiteral("IBRT.RenderWorker.42"));
+#endif
 }
 
 void IbrtTests::unitWorkerIpcRoundTripMessage()
@@ -993,8 +997,18 @@ void IbrtTests::unitWorkerIpcRoundTripMessage()
 void IbrtTests::unitRenderWorkflowShouldPreemptWorkerControl()
 {
   QVERIFY(!ibrt::renderworkflow::shouldPreemptWorkerControl(false, 10.0f));
-  QVERIFY(!ibrt::renderworkflow::shouldPreemptWorkerControl(true, 0.5f));
-  QVERIFY(ibrt::renderworkflow::shouldPreemptWorkerControl(true, 0.51f));
+  QVERIFY(!ibrt::renderworkflow::shouldPreemptWorkerControl(true, 2.0f));
+  QVERIFY(ibrt::renderworkflow::shouldPreemptWorkerControl(true, 2.01f));
+}
+
+void IbrtTests::unitRenderWorkflowShouldPreemptWorkerInteractiveCamera()
+{
+  QVERIFY(!ibrt::renderworkflow::shouldPreemptWorkerInteractiveCamera(
+      false, 10.0f));
+  QVERIFY(!ibrt::renderworkflow::shouldPreemptWorkerInteractiveCamera(
+      true, 0.1f));
+  QVERIFY(ibrt::renderworkflow::shouldPreemptWorkerInteractiveCamera(
+      true, 0.11f));
 }
 
 void IbrtTests::unitRenderWorkflowDecidesRebuildAction()
@@ -1069,6 +1083,11 @@ void IbrtTests::unitRenderWorkerQueueCoalescesLatestCommands()
   QCOMPARE(commands.renderer, true);
   QCOMPARE(commands.rendererType, QStringLiteral("scivis"));
 
+  ibrt::renderworkerqueue::queueInteracting(commands, true);
+  ibrt::renderworkerqueue::queueInteracting(commands, false);
+  QCOMPARE(commands.interacting, true);
+  QCOMPARE(commands.interactingState, false);
+
   RenderWorkerClient::RenderSettingsState settings;
   settings.customStartScale = 4;
   ibrt::renderworkerqueue::queueSettings(commands, settings);
@@ -1101,12 +1120,15 @@ void IbrtTests::unitRenderWorkerQueueDrainClearsOneShotFlags()
   ibrt::renderworkerqueue::PendingCommands commands;
   ibrt::renderworkerqueue::queueResize(commands, 64, 64);
   ibrt::renderworkerqueue::queueRenderer(commands, QStringLiteral("ao"));
+  ibrt::renderworkerqueue::queueInteracting(commands, true);
   ibrt::renderworkerqueue::queueResetAccumulation(commands);
 
   const auto drained = ibrt::renderworkerqueue::drain(commands);
   QCOMPARE(drained.resize, true);
   QCOMPARE(drained.renderer, true);
   QCOMPARE(drained.resetAccumulation, true);
+  QCOMPARE(drained.interacting, true);
+  QCOMPARE(drained.interactingState, true);
   QCOMPARE(drained.width, 64);
   QCOMPARE(drained.rendererType, QStringLiteral("ao"));
 
@@ -1114,6 +1136,7 @@ void IbrtTests::unitRenderWorkerQueueDrainClearsOneShotFlags()
   QCOMPARE(commands.camera, false);
   QCOMPARE(commands.resetAccumulation, false);
   QCOMPARE(commands.renderer, false);
+  QCOMPARE(commands.interacting, false);
   QCOMPARE(commands.settings, false);
 }
 
@@ -1179,13 +1202,12 @@ void IbrtTests::unitRenderReplaySkipsWhenWorkerPathInactive()
 
 void IbrtTests::integrationWorkerSmokeTestWorkerLifecycle()
 {
-#ifndef _WIN32
-  QSKIP("Render worker smoke test is Windows-only.");
-#else
+  if (!RenderWorkerClient::isSupported())
+    QSKIP("Render worker smoke test is unsupported on this platform.");
   const QString workerPath =
-      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+      RenderWorkerClient::defaultWorkerPath(QCoreApplication::applicationDirPath());
   if (!QFileInfo::exists(workerPath))
-    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+    QSKIP("Render worker executable is not present next to the test binary.");
 
   std::fprintf(stderr, "IBRTTests: worker smoke starting with %s\n", workerPath.toStdString().c_str());
   RenderWorkerClient client;
@@ -1209,6 +1231,12 @@ void IbrtTests::integrationWorkerSmokeTestWorkerLifecycle()
   std::fprintf(stderr, "IBRTTests: pushing settings\n");
   if (!client.setRenderSettings(settings)) {
     std::fprintf(stderr, "IBRTTests: setRenderSettings failed: %s\n",
+        client.lastError().toStdString().c_str());
+    QFAIL(qPrintable(client.lastError()));
+  }
+  std::fprintf(stderr, "IBRTTests: toggling interaction\n");
+  if (!client.setInteracting(true) || !client.setInteracting(false)) {
+    std::fprintf(stderr, "IBRTTests: setInteracting failed: %s\n",
         client.lastError().toStdString().c_str());
     QFAIL(qPrintable(client.lastError()));
   }
@@ -1241,22 +1269,20 @@ void IbrtTests::integrationWorkerSmokeTestWorkerLifecycle()
   std::fprintf(stderr, "IBRTTests: stopping worker\n");
 
   client.stop();
-#endif
 }
 
 void IbrtTests::integrationWorkerLoadBrlcadProducesNonEmptyFrame()
 {
-#ifndef _WIN32
-  QSKIP("Render worker integration test is Windows-only.");
-#else
+  if (!RenderWorkerClient::isSupported())
+    QSKIP("Render worker integration test is unsupported on this platform.");
   const auto dbPath = makeExampleBrlcadDb();
   if (!dbPath.has_value())
     QSKIP("Generated BRL-CAD fixture database is unavailable.");
 
   const QString workerPath =
-      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+      RenderWorkerClient::defaultWorkerPath(QCoreApplication::applicationDirPath());
   if (!QFileInfo::exists(workerPath))
-    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+    QSKIP("Render worker executable is not present next to the test binary.");
 
   RenderWorkerClient client;
   if (!client.start(workerPath))
@@ -1270,22 +1296,20 @@ void IbrtTests::integrationWorkerLoadBrlcadProducesNonEmptyFrame()
   QVERIFY(!frame.isNull());
   QVERIFY(imageHasNonZeroPixel(frame));
   client.stop();
-#endif
 }
 
 void IbrtTests::integrationWorkerLoadBrlcadPropagatesValidBounds()
 {
-#ifndef _WIN32
-  QSKIP("Render worker integration test is Windows-only.");
-#else
+  if (!RenderWorkerClient::isSupported())
+    QSKIP("Render worker integration test is unsupported on this platform.");
   const auto dbPath = makeExampleBrlcadDb();
   if (!dbPath.has_value())
     QSKIP("Generated BRL-CAD fixture database is unavailable.");
 
   const QString workerPath =
-      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+      RenderWorkerClient::defaultWorkerPath(QCoreApplication::applicationDirPath());
   if (!QFileInfo::exists(workerPath))
-    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+    QSKIP("Render worker executable is not present next to the test binary.");
 
   RenderWorkerClient client;
   if (!client.start(workerPath))
@@ -1304,22 +1328,20 @@ void IbrtTests::integrationWorkerLoadBrlcadPropagatesValidBounds()
   QVERIFY(result.boundsMax.y >= result.boundsMin.y);
   QVERIFY(result.boundsMax.z >= result.boundsMin.z);
   client.stop();
-#endif
 }
 
 void IbrtTests::integrationWorkerFrameMatchesRequestedViewportSize()
 {
-#ifndef _WIN32
-  QSKIP("Render worker integration test is Windows-only.");
-#else
+  if (!RenderWorkerClient::isSupported())
+    QSKIP("Render worker integration test is unsupported on this platform.");
   const auto dbPath = makeExampleBrlcadDb();
   if (!dbPath.has_value())
     QSKIP("Generated BRL-CAD fixture database is unavailable.");
 
   const QString workerPath =
-      QDir(QCoreApplication::applicationDirPath()).filePath("IBRTRenderWorker.exe");
+      RenderWorkerClient::defaultWorkerPath(QCoreApplication::applicationDirPath());
   if (!QFileInfo::exists(workerPath))
-    QSKIP("IBRTRenderWorker.exe is not present next to the test binary.");
+    QSKIP("Render worker executable is not present next to the test binary.");
 
   RenderWorkerClient client;
   if (!client.start(workerPath))
@@ -1359,7 +1381,6 @@ void IbrtTests::integrationWorkerFrameMatchesRequestedViewportSize()
   QCOMPARE(frame.width(), 96);
   QCOMPARE(frame.height(), 72);
   client.stop();
-#endif
 }
 
 QTEST_GUILESS_MAIN(IbrtTests)

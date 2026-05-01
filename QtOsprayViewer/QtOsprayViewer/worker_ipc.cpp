@@ -1,22 +1,33 @@
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
 #include "worker_ipc.h"
 
 #include <vector>
 
+#ifdef __linux__
+#include <cerrno>
+#include <unistd.h>
+#endif
+
 namespace ibrt::ipc {
 
-// Builds a unique pipe name for a viewer/worker pair based on the viewer process ID.
 std::string makePipeName(uint32_t processId)
 {
+#ifdef _WIN32
   return "\\\\.\\pipe\\IBRT.RenderWorker." + std::to_string(processId);
+#elif defined(__linux__)
+  return "/tmp/ibrt_render_" + std::to_string(processId) + ".sock";
+#else
+  return "IBRT.RenderWorker." + std::to_string(processId);
+#endif
 }
 
 #ifdef _WIN32
 namespace {
 
-// Writes a full message buffer to the pipe, retrying until all bytes are sent.
 bool writeAll(HANDLE pipe, const void *data, DWORD size)
 {
-  // Named-pipe writes are not guaranteed to complete in one call.
   const auto *bytes = static_cast<const uint8_t *>(data);
   DWORD totalWritten = 0;
   while (totalWritten < size) {
@@ -28,10 +39,8 @@ bool writeAll(HANDLE pipe, const void *data, DWORD size)
   return true;
 }
 
-// Reads an exact byte count from the pipe before returning control to the caller.
 bool readAll(HANDLE pipe, void *data, DWORD size)
 {
-  // Mirror writeAll() so higher-level message parsing can assume exact sizes.
   auto *bytes = static_cast<uint8_t *>(data);
   DWORD totalRead = 0;
   while (totalRead < size) {
@@ -47,11 +56,8 @@ bool readAll(HANDLE pipe, void *data, DWORD size)
 
 } // namespace
 
-// Serializes and writes one protocol message to the named pipe.
 bool writeMessage(HANDLE pipe, const Message &message)
 {
-  // Every payload is preceded by a fixed-size header so the receiver can safely
-  // validate message type and byte count before parsing.
   MessageHeader header;
   header.type = static_cast<uint32_t>(message.type);
   header.requestId = message.requestId;
@@ -68,7 +74,6 @@ bool writeMessage(HANDLE pipe, const Message &message)
   return true;
 }
 
-// Reads and validates one protocol message from the named pipe.
 bool readMessage(HANDLE pipe, Message &message)
 {
   MessageHeader header;
@@ -87,6 +92,86 @@ bool readMessage(HANDLE pipe, Message &message)
 
   std::vector<char> buffer(header.payloadSize);
   if (!readAll(pipe, buffer.data(), header.payloadSize))
+    return false;
+
+  message.payload.assign(buffer.begin(), buffer.end());
+  return true;
+}
+#elif defined(__linux__)
+namespace {
+
+bool writeAll(int fd, const void *data, size_t size)
+{
+  const auto *bytes = static_cast<const uint8_t *>(data);
+  size_t totalWritten = 0;
+  while (totalWritten < size) {
+    const ssize_t written = ::write(fd, bytes + totalWritten, size - totalWritten);
+    if (written < 0) {
+      if (errno == EINTR)
+        continue;
+      return false;
+    }
+    if (written == 0)
+      return false;
+    totalWritten += size_t(written);
+  }
+  return true;
+}
+
+bool readAll(int fd, void *data, size_t size)
+{
+  auto *bytes = static_cast<uint8_t *>(data);
+  size_t totalRead = 0;
+  while (totalRead < size) {
+    const ssize_t count = ::read(fd, bytes + totalRead, size - totalRead);
+    if (count < 0) {
+      if (errno == EINTR)
+        continue;
+      return false;
+    }
+    if (count == 0)
+      return false;
+    totalRead += size_t(count);
+  }
+  return true;
+}
+
+} // namespace
+
+bool writeMessage(int fd, const Message &message)
+{
+  MessageHeader header;
+  header.type = static_cast<uint32_t>(message.type);
+  header.requestId = message.requestId;
+  header.payloadSize = static_cast<uint32_t>(message.payload.size());
+
+  if (!writeAll(fd, &header, sizeof(header)))
+    return false;
+
+  if (!message.payload.empty() && !writeAll(fd, message.payload.data(), message.payload.size()))
+    return false;
+
+  return true;
+}
+
+bool readMessage(int fd, Message &message)
+{
+  MessageHeader header;
+  if (!readAll(fd, &header, sizeof(header)))
+    return false;
+
+  if (header.magic != 0x54425249 || header.version != 1)
+    return false;
+
+  message.type = static_cast<MessageType>(header.type);
+  message.requestId = header.requestId;
+  message.payload.clear();
+
+  if (header.payloadSize == 0)
+    return true;
+
+  std::vector<char> buffer(header.payloadSize);
+  if (!readAll(fd, buffer.data(), header.payloadSize))
     return false;
 
   message.payload.assign(buffer.begin(), buffer.end());

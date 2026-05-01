@@ -1,3 +1,6 @@
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
 #include "ospraybackend.h"
 #include <chrono>
 #include <algorithm>
@@ -271,17 +274,12 @@ bool OsprayBackend::advanceRender(int timeBudgetMs)
     const bool accumulationEnabled = accumulationEnabledForCurrentMode();
     const int maxAccumulationFrames = maxAccumulationFramesForCurrentMode();
     const bool fullResAccumOnly = fullResAccumulationOnlyForCurrentMode();
-    const bool lowQualityOnInteract = lowQualityWhileInteractingForCurrentMode();
     const int configuredAo = configuredAoSamplesForCurrentMode();
     const int configuredPixel = configuredPixelSamplesForCurrentMode();
-    const bool fixedPreviewMode = isInteracting_ && lowQualityOnInteract;
-    const int interactionAo = fixedPreviewMode ? 0 : configuredAo;
-    const int interactionPixel = fixedPreviewMode ? 1 : configuredPixel;
+    const bool fixedPreviewMode = false;
+    const int interactionAo = configuredAo;
+    const int interactionPixel = configuredPixel;
     dynamicModeActive_ = (settingsMode_ == SettingsMode::Automatic);
-    if (fixedPreviewMode) {
-      renderPhase_ = RenderPhase::Progressive;
-      setProgressiveScale(16);
-    }
     const bool willAccumulate =
         !fixedPreviewMode && passScale_ <= 1 && accumFb_.handle()
         && accumulationEnabled;
@@ -731,11 +729,6 @@ const std::string &OsprayBackend::currentRenderer() const
 // Sets ambient-occlusion sampling for the current rendering mode.
 void OsprayBackend::setAoSamples(int samples)
 {
-  if (frameInFlight_) {
-    setError("AO sample update ignored while render is in flight.");
-    return;
-  }
-
   const int clamped = std::clamp(samples, 0, kMaxSafeAoSamples);
   if (customAoSamples_ == clamped)
     return;
@@ -1447,10 +1440,7 @@ bool OsprayBackend::finishCompletedRender()
 
   currentFrame_.wait(OSP_FRAME_FINISHED);
   lastFrameTimeMs_ = currentFrame_.duration() * 1000.0f;
-  watchdogTriggered_ =
-      (lastFrameTimeMs_ >= float(watchdogTimeoutForCurrentMode()));
-  if (watchdogTriggered_)
-    ++watchdogCancelCount_;
+  watchdogTriggered_ = false;
 
   bool updatedImage = false;
 
@@ -1480,7 +1470,7 @@ bool OsprayBackend::finishCompletedRender()
   inFlightStartValid_ = false;
   currentFrame_ = ospray::cpp::Future();
   if (renderPhase_ == RenderPhase::Progressive)
-    applyAoBackoff(watchdogTriggered_);
+    applyAoBackoff(false);
   if (activeRenderRequest_) {
     char reason[64];
     std::snprintf(reason, sizeof(reason), "frameMs=%.2f", lastFrameTimeMs_);
@@ -1530,8 +1520,7 @@ void OsprayBackend::applyPendingState()
     camera_.setParam("fovy", pendingCameraState_->fovyDeg);
     cameraDirty_ = true;
     pendingCameraState_.reset();
-    if (!isInteracting_)
-      pendingResetAccumulation_ = true;
+    pendingResetAccumulation_ = true;
   }
 
   if (pendingResetAccumulation_) {
@@ -1611,7 +1600,7 @@ uint64_t OsprayBackend::accumulatedFrames() const
   return accumulatedFrames_;
 }
 
-// Returns how many frames were cancelled by the render watchdog.
+// Returns how many frames were actually cancelled by the render watchdog.
 uint64_t OsprayBackend::watchdogCancelCount() const
 {
   return watchdogCancelCount_;
@@ -1636,8 +1625,7 @@ std::vector<std::string> OsprayBackend::listBrlcadObjects(
     return names;
 
   directory **dpv = nullptr;
-  const size_t count =
-      db_ls(tmpRtip->rti_dbip, DB_LS_TOPS | DB_LS_COMB | DB_LS_REGION, nullptr, &dpv);
+  const size_t count = db_ls(tmpRtip->rti_dbip, DB_LS_TOPS, nullptr, &dpv);
 
   for (size_t i = 0; i < count; ++i) {
     if (dpv[i] && dpv[i]->d_namep && *dpv[i]->d_namep)
@@ -1654,7 +1642,7 @@ std::vector<std::string> OsprayBackend::listBrlcadObjects(
 }
 
 // Builds a BRL-CAD object hierarchy suitable for UI browsing.
-std::vector<OsprayBackend::BrlcadNode> OsprayBackend::listBrlcadHierarchy(
+std::vector<OsprayBackend::BrlcadNode> OsprayBackend::getBrlcadHierarchy(
     const std::string &path) const
 {
   std::vector<BrlcadNode> roots;
@@ -1690,8 +1678,36 @@ std::vector<OsprayBackend::BrlcadNode> OsprayBackend::listBrlcadHierarchy(
       db_ls(tmpRtip->rti_dbip, DB_LS_TOPS | DB_LS_COMB | DB_LS_REGION, nullptr, &dpv);
   cleanup.dpv = dpv;
 
+  std::unordered_set<std::string> referencedNames;
   std::function<BrlcadNode(const directory *, std::unordered_set<std::string> &)> buildDirectoryNode;
   std::function<void(const union tree *, BrlcadNode &, std::unordered_set<std::string> &)> appendTreeChildren;
+  std::function<void(const union tree *)> collectReferencedNames;
+
+  collectReferencedNames = [&](const union tree *tree) {
+    if (!tree)
+      return;
+
+    switch (tree->tr_op) {
+    case OP_DB_LEAF:
+      if (tree->tr_l.tl_name && *tree->tr_l.tl_name)
+        referencedNames.insert(tree->tr_l.tl_name);
+      return;
+    case OP_UNION:
+    case OP_INTERSECT:
+    case OP_SUBTRACT:
+    case OP_XOR:
+      collectReferencedNames(tree->tr_b.tb_left);
+      collectReferencedNames(tree->tr_b.tb_right);
+      return;
+    case OP_NOT:
+    case OP_GUARD:
+    case OP_XNOP:
+      collectReferencedNames(tree->tr_b.tb_left);
+      return;
+    default:
+      return;
+    }
+  };
 
   buildDirectoryNode = [&](const directory *dp,
                            std::unordered_set<std::string> &ancestry) -> BrlcadNode {
@@ -1763,6 +1779,30 @@ std::vector<OsprayBackend::BrlcadNode> OsprayBackend::listBrlcadHierarchy(
   for (size_t i = 0; i < count; ++i) {
     if (!dpv[i] || !dpv[i]->d_namep || !*dpv[i]->d_namep)
       continue;
+
+    struct rt_db_internal intern;
+    RT_DB_INTERNAL_INIT(&intern);
+    if (rt_db_get_internal(&intern, dpv[i], tmpRtip->rti_dbip, nullptr, &localResource) < 0)
+      continue;
+
+    if (intern.idb_type == ID_COMBINATION) {
+      const auto *comb = static_cast<const rt_comb_internal *>(intern.idb_ptr);
+      if (comb)
+        collectReferencedNames(comb->tree);
+    }
+
+    rt_db_free_internal(&intern);
+  }
+
+  std::unordered_set<std::string> rootNames;
+  for (size_t i = 0; i < count; ++i) {
+    if (!dpv[i] || !dpv[i]->d_namep || !*dpv[i]->d_namep)
+      continue;
+    const std::string rootName = dpv[i]->d_namep;
+    if (referencedNames.find(rootName) != referencedNames.end())
+      continue;
+    if (!rootNames.insert(rootName).second)
+      continue;
     std::unordered_set<std::string> ancestry;
     roots.push_back(buildDirectoryNode(dpv[i], ancestry));
   }
@@ -1772,4 +1812,10 @@ std::vector<OsprayBackend::BrlcadNode> OsprayBackend::listBrlcadHierarchy(
   });
 
   return roots;
+}
+
+std::vector<OsprayBackend::BrlcadNode> OsprayBackend::listBrlcadHierarchy(
+    const std::string &path) const
+{
+  return getBrlcadHierarchy(path);
 }
