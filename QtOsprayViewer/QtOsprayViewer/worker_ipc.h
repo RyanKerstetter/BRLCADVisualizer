@@ -5,8 +5,6 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#elif defined(__linux__)
-#include <QtCore/qglobal.h>
 #endif
 
 namespace ibrt::ipc {
@@ -54,8 +52,8 @@ std::string makePipeName(uint32_t processId);
 bool writeMessage(HANDLE pipe, const Message &message);
 bool readMessage(HANDLE pipe, Message &message);
 #elif defined(__linux__)
-bool writeMessage(qintptr fd, const Message &message);
-bool readMessage(qintptr fd, Message &message);
+bool writeMessage(int fd, const Message &message);
+bool readMessage(int fd, Message &message);
 #endif
 
 } // namespace ibrt::ipc

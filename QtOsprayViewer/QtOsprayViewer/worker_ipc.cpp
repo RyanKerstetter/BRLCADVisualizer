@@ -14,7 +14,7 @@ std::string makePipeName(uint32_t processId)
 #ifdef _WIN32
   return "\\\\.\\pipe\\IBRT.RenderWorker." + std::to_string(processId);
 #elif defined(__linux__)
-  return "/tmp/IBRT.RenderWorker." + std::to_string(processId) + ".sock";
+  return "/tmp/ibrt_render_" + std::to_string(processId) + ".sock";
 #else
   return "IBRT.RenderWorker." + std::to_string(processId);
 #endif
@@ -97,7 +97,7 @@ bool readMessage(HANDLE pipe, Message &message)
 #elif defined(__linux__)
 namespace {
 
-bool writeAll(qintptr fd, const void *data, size_t size)
+bool writeAll(int fd, const void *data, size_t size)
 {
   const auto *bytes = static_cast<const uint8_t *>(data);
   size_t totalWritten = 0;
@@ -115,7 +115,7 @@ bool writeAll(qintptr fd, const void *data, size_t size)
   return true;
 }
 
-bool readAll(qintptr fd, void *data, size_t size)
+bool readAll(int fd, void *data, size_t size)
 {
   auto *bytes = static_cast<uint8_t *>(data);
   size_t totalRead = 0;
@@ -135,7 +135,7 @@ bool readAll(qintptr fd, void *data, size_t size)
 
 } // namespace
 
-bool writeMessage(qintptr fd, const Message &message)
+bool writeMessage(int fd, const Message &message)
 {
   MessageHeader header;
   header.type = static_cast<uint32_t>(message.type);
@@ -151,7 +151,7 @@ bool writeMessage(qintptr fd, const Message &message)
   return true;
 }
 
-bool readMessage(qintptr fd, Message &message)
+bool readMessage(int fd, Message &message)
 {
   MessageHeader header;
   if (!readAll(fd, &header, sizeof(header)))

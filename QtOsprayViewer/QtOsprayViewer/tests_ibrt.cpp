@@ -976,7 +976,7 @@ void IbrtTests::unitWorkerIpcPipeNameUsesProcessId()
       QStringLiteral("\\\\.\\pipe\\IBRT.RenderWorker.42"));
 #elif defined(__linux__)
   QCOMPARE(QString::fromStdString(ibrt::ipc::makePipeName(42)),
-      QStringLiteral("/tmp/IBRT.RenderWorker.42.sock"));
+      QStringLiteral("/tmp/ibrt_render_42.sock"));
 #else
   QCOMPARE(QString::fromStdString(ibrt::ipc::makePipeName(42)),
       QStringLiteral("IBRT.RenderWorker.42"));

@@ -13,8 +13,6 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#elif defined(__linux__)
-class QLocalSocket;
 #endif
 
 class RenderWorkerClient : public QObject
@@ -110,8 +108,7 @@ class RenderWorkerClient : public QObject
       const std::string &payload,
       std::string *responsePayload);
   void closeSocket();
-  QLocalSocket *socket_ = nullptr;
-  qintptr socketDescriptor_ = -1;
+  int socket_ = -1;
 #endif
   QProcess *process_ = nullptr;
   QString workerPath_;

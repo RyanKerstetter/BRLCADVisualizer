@@ -7,7 +7,8 @@
 #include <QProcess>
 #include <QThread>
 #ifdef __linux__
-#include <QLocalSocket>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 #endif
 
@@ -97,7 +98,7 @@ bool RenderWorkerClient::start(const QString &workerPath)
 #else
   pipeName_ =
       QString::fromStdString(ibrt::ipc::makePipeName(QCoreApplication::applicationPid()));
-  process_->start(workerPath, {QStringLiteral("--socket"), pipeName_});
+  process_->start(workerPath, {QStringLiteral("--pipe"), pipeName_});
 #endif
   if (!process_->waitForStarted(5000)) {
     lastError_ = QStringLiteral("Failed to start render worker process.");
@@ -608,29 +609,35 @@ void RenderWorkerClient::closePipe()
 #elif defined(__linux__)
 bool RenderWorkerClient::connectSocket()
 {
-  delete socket_;
-  socket_ = new QLocalSocket(this);
+  const std::string path = pipeName_.toStdString();
 
   for (int attempt = 0; attempt < 50; ++attempt) {
-    socket_->abort();
-    socket_->connectToServer(pipeName_);
-    if (socket_->waitForConnected(1000)) {
-      socketDescriptor_ = socket_->socketDescriptor();
-      if (socketDescriptor_ >= 0)
-        return true;
-      break;
+    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd == -1) {
+      lastError_ = QStringLiteral("Failed to create render worker socket.");
+      return false;
     }
+
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+
+    if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0) {
+      socket_ = fd;
+      return true;
+    }
+
+    ::close(fd);
     QThread::msleep(100);
   }
 
   lastError_ = QStringLiteral("Failed to connect to render worker socket.");
-  closeSocket();
   return false;
 }
 
 bool RenderWorkerClient::sendPing()
 {
-  if (socketDescriptor_ < 0)
+  if (socket_ == -1)
     return false;
 
   QString responsePayload;
@@ -651,7 +658,7 @@ bool RenderWorkerClient::sendRequestBytes(
     uint32_t type, const std::string &payload, std::string *responsePayload)
 {
   std::lock_guard<std::mutex> lock(requestMutex_);
-  if (socketDescriptor_ < 0) {
+  if (socket_ == -1) {
     lastError_ = QStringLiteral("Render worker socket is not connected.");
     return false;
   }
@@ -659,7 +666,7 @@ bool RenderWorkerClient::sendRequestBytes(
   const uint64_t requestId = nextRequestId_++;
   const ibrt::ipc::Message request{
       static_cast<ibrt::ipc::MessageType>(type), requestId, payload};
-  if (!ibrt::ipc::writeMessage(socketDescriptor_, request)) {
+  if (!ibrt::ipc::writeMessage(socket_, request)) {
     lastError_ = QStringLiteral("Failed to send request to render worker.");
     closeSocket();
     setConnected(false);
@@ -667,7 +674,7 @@ bool RenderWorkerClient::sendRequestBytes(
   }
 
   ibrt::ipc::Message response;
-  if (!ibrt::ipc::readMessage(socketDescriptor_, response)) {
+  if (!ibrt::ipc::readMessage(socket_, response)) {
     lastError_ = QStringLiteral("Failed to read response from render worker.");
     closeSocket();
     setConnected(false);
@@ -729,14 +736,9 @@ bool RenderWorkerClient::sendRequestBytes(
 
 void RenderWorkerClient::closeSocket()
 {
-  if (socketDescriptor_ >= 0) {
-    ::close(int(socketDescriptor_));
-    socketDescriptor_ = -1;
-  }
-  if (socket_) {
-    socket_->abort();
-    socket_->deleteLater();
-    socket_ = nullptr;
+  if (socket_ != -1) {
+    ::close(socket_);
+    socket_ = -1;
   }
 }
 #endif

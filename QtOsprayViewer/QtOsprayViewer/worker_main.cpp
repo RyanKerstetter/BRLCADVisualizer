@@ -11,9 +11,9 @@
 #ifdef _WIN32
 #include <windows.h>
 #elif defined(__linux__)
-#include <QCoreApplication>
-#include <QLocalServer>
-#include <QLocalSocket>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -81,50 +81,49 @@ int main(int argc, char *argv[])
   fprintf(stderr, "IBRT render worker currently supports Windows only.\n");
   return 1;
 #elif defined(__linux__)
-  QCoreApplication app(argc, argv);
-
-  std::string socketName;
+  std::string pipeName;
   for (int i = 1; i + 1 < argc; ++i) {
-    if (std::string(argv[i]) == "--socket") {
-      socketName = argv[i + 1];
+    if (std::string(argv[i]) == "--pipe") {
+      pipeName = argv[i + 1];
       break;
     }
   }
 
-  if (socketName.empty()) {
-    fprintf(stderr, "IBRT render worker missing --socket argument.\n");
+  if (pipeName.empty()) {
+    fprintf(stderr, "IBRT render worker missing --pipe argument.\n");
     return 1;
   }
 
-  QLocalServer::removeServer(QString::fromStdString(socketName));
-  QLocalServer server;
-  if (!server.listen(QString::fromStdString(socketName))) {
-    fprintf(stderr, "IBRT render worker failed to create local socket server.\n");
+  ::unlink(pipeName.c_str());
+
+  int serverFd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (serverFd == -1) {
+    fprintf(stderr, "IBRT render worker failed to create socket.\n");
     return 1;
   }
 
-  if (!server.waitForNewConnection(5000)) {
-    server.close();
-    QLocalServer::removeServer(QString::fromStdString(socketName));
-    fprintf(stderr, "IBRT render worker timed out waiting for local socket connection.\n");
+  sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  std::strncpy(addr.sun_path, pipeName.c_str(), sizeof(addr.sun_path) - 1);
+
+  if (::bind(serverFd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+    ::close(serverFd);
+    fprintf(stderr, "IBRT render worker failed to bind socket.\n");
     return 1;
   }
 
-  QLocalSocket *connection = server.nextPendingConnection();
-  if (!connection) {
-    server.close();
-    QLocalServer::removeServer(QString::fromStdString(socketName));
-    fprintf(stderr, "IBRT render worker failed to accept local socket connection.\n");
+  if (::listen(serverFd, 1) != 0) {
+    ::close(serverFd);
+    ::unlink(pipeName.c_str());
+    fprintf(stderr, "IBRT render worker failed to listen on socket.\n");
     return 1;
   }
 
-  const qintptr socketDescriptor = connection->socketDescriptor();
-  if (socketDescriptor < 0) {
-    connection->close();
-    delete connection;
-    server.close();
-    QLocalServer::removeServer(QString::fromStdString(socketName));
-    fprintf(stderr, "IBRT render worker failed to obtain local socket descriptor.\n");
+  int socketDescriptor = ::accept(serverFd, nullptr, nullptr);
+  ::close(serverFd);
+  if (socketDescriptor == -1) {
+    ::unlink(pipeName.c_str());
+    fprintf(stderr, "IBRT render worker failed to accept socket connection.\n");
     return 1;
   }
 
@@ -133,10 +132,8 @@ int main(int argc, char *argv[])
   if (ospInit(&ac, av) != OSP_NO_ERROR) {
     ibrt::ipc::writeMessage(socketDescriptor,
         {ibrt::ipc::MessageType::Error, 0, "OSPRay initialization failed."});
-    connection->close();
-    delete connection;
-    server.close();
-    QLocalServer::removeServer(QString::fromStdString(socketName));
+    ::close(socketDescriptor);
+    ::unlink(pipeName.c_str());
     return 1;
   }
 
@@ -145,10 +142,8 @@ int main(int argc, char *argv[])
     ibrt::ipc::writeMessage(socketDescriptor,
         {ibrt::ipc::MessageType::Error, 0, "Failed to create OSPRay CPU device."});
     ospShutdown();
-    connection->close();
-    delete connection;
-    server.close();
-    QLocalServer::removeServer(QString::fromStdString(socketName));
+    ::close(socketDescriptor);
+    ::unlink(pipeName.c_str());
     return 1;
   }
 
@@ -385,10 +380,8 @@ int main(int argc, char *argv[])
   }
 
   ospShutdown();
-  connection->close();
-  delete connection;
-  server.close();
-  QLocalServer::removeServer(QString::fromStdString(socketName));
+  ::close(socketDescriptor);
+  ::unlink(pipeName.c_str());
   return 0;
 #else
   std::string pipeName;
