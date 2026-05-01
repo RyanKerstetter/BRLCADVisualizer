@@ -245,6 +245,26 @@ target_link_libraries(IBRTTests PRIVATE
     $<$<BOOL:${WIN32}>:TBB::tbb>
 )
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set_target_properties(QtOsprayViewer PROPERTIES
+        INSTALL_RPATH "${OSPRAY_PREFIX}/lib;${RKCOMMON_PREFIX}/lib;${BRLCAD_PREFIX}/lib"
+        BUILD_RPATH   "${OSPRAY_PREFIX}/lib;${RKCOMMON_PREFIX}/lib;${BRLCAD_PREFIX}/lib"
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+    )
+    if(TARGET IBRTRenderWorker)
+        set_target_properties(IBRTRenderWorker PROPERTIES
+            INSTALL_RPATH "${OSPRAY_PREFIX}/lib;${RKCOMMON_PREFIX}/lib;${BRLCAD_PREFIX}/lib"
+            BUILD_RPATH   "${OSPRAY_PREFIX}/lib;${RKCOMMON_PREFIX}/lib;${BRLCAD_PREFIX}/lib"
+            INSTALL_RPATH_USE_LINK_PATH TRUE
+        )
+    endif()
+    set_target_properties(IBRTTests PROPERTIES
+        INSTALL_RPATH "${OSPRAY_PREFIX}/lib;${RKCOMMON_PREFIX}/lib;${BRLCAD_PREFIX}/lib"
+        BUILD_RPATH   "${OSPRAY_PREFIX}/lib;${RKCOMMON_PREFIX}/lib;${BRLCAD_PREFIX}/lib"
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+    )
+endif()
+
 if(WIN32 AND TARGET IBRTRenderWorker)
     set(TBB_REDIST_DIR "${TBB_ROOT}/redist/intel64/vc14")
 
@@ -469,6 +489,20 @@ if(WIN32 AND TARGET IBRTRenderWorker)
     add_custom_command(TARGET IBRTTests POST_BUILD
         COMMAND "${WINDEPLOYQT}" "$<TARGET_FILE:IBRTTests>"
         COMMENT "Running windeployqt for tests...")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET IBRTRenderWorker)
+    add_dependencies(QtOsprayViewer IBRTRenderWorker)
+    add_custom_command(TARGET QtOsprayViewer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:IBRTRenderWorker>"
+            "$<TARGET_FILE_DIR:QtOsprayViewer>/IBRTRenderWorker"
+        COMMENT "Deploying render worker executable...")
+
+    add_dependencies(IBRTTests IBRTRenderWorker)
+    add_custom_command(TARGET IBRTTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:IBRTRenderWorker>"
+            "$<TARGET_FILE_DIR:IBRTTests>/IBRTRenderWorker"
+        COMMENT "Deploying render worker executable for tests...")
 elseif(WIN32)
     message(STATUS "IBRT render worker target is disabled; the viewer will use local rendering only.")
 endif()

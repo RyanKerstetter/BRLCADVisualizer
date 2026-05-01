@@ -85,11 +85,13 @@ bool RenderWorkerClient::start(const QString &workerPath)
 {
 #if !defined(_WIN32) && !defined(__linux__)
   Q_UNUSED(workerPath);
-  lastError_ = QStringLiteral("Render worker is currently implemented for Windows only.");
+  lastError_ = QStringLiteral("Render worker is currently implemented for Windows and Linux only.");
   return false;
 #else
   workerPath_ = workerPath;
   stop();
+
+  process_->setProcessChannelMode(QProcess::ForwardedChannels);
 
 #ifdef _WIN32
   pipeName_ =
@@ -192,7 +194,7 @@ RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadObj(const QString &p
   SceneLoadResult result;
 #if !defined(_WIN32) && !defined(__linux__)
   Q_UNUSED(path);
-  result.errorMessage = QStringLiteral("Render worker is currently implemented for Windows only.");
+  result.errorMessage = QStringLiteral("Render worker is currently implemented for Windows and Linux only.");
   lastError_ = result.errorMessage;
   return result;
 #else
@@ -240,7 +242,7 @@ RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadBrlcad(
 #if !defined(_WIN32) && !defined(__linux__)
   Q_UNUSED(path);
   Q_UNUSED(objectName);
-  result.errorMessage = QStringLiteral("Render worker is currently implemented for Windows only.");
+  result.errorMessage = QStringLiteral("Render worker is currently implemented for Windows and Linux only.");
   lastError_ = result.errorMessage;
   return result;
 #else
