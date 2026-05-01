@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #pragma once
 
 #if defined(ISPC) || defined(OSPRAY_TARGET_SYCL)

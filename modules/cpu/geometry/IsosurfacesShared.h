@@ -1,5 +1,3 @@
-// Copyright 2022 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
 #ifdef OSPRAY_ENABLE_VOLUMES
 
 #pragma once

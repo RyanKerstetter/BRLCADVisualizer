@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "Builder.h"
 #include "Noise.h"
 #include "ospray_testing.h"

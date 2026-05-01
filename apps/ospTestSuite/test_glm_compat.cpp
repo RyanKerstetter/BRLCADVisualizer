@@ -1,6 +1,3 @@
-// Copyright 2020 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include <gtest/gtest.h>
 // ospray_cpp
 #include "ospray/ospray_cpp.h"

@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "common/FeatureFlagsEnum.h"
 #include "lights/LightDispatch.ih"
 #include "math/random.ih"

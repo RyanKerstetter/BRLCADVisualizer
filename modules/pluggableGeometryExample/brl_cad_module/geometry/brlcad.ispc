@@ -1,6 +1,3 @@
-// Copyright 2009-2024 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "common/DifferentialGeometry.ih"
 #include "common/Ray.ih"
 // c++ shared

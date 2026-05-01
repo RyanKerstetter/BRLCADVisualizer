@@ -1,6 +1,3 @@
-## Copyright 2020 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 set(COMPONENT_NAME glm)
 
 set(COMPONENT_PATH ${INSTALL_DIR_ABSOLUTE})

@@ -1,6 +1,3 @@
-## Copyright 2021 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 set(COMPONENT_NAME snappy)
 
 if (INSTALL_IN_SEPARATE_DIRECTORIES)

@@ -1,6 +1,3 @@
-// Copyright 2022 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "ArcballCamera.h"
 #include "ospray_testing.h"
 #include "rkcommon/utility/random.h"

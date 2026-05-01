@@ -1,6 +1,3 @@
-// Copyright 2023 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "test_pt_material.h"
 
 namespace ospray {

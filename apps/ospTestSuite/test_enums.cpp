@@ -1,6 +1,3 @@
-// Copyright 2019 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include <gtest/gtest.h>
 #ifdef SYCL_LANGUAGE_VERSION
 #include "sycl/sycl.hpp"

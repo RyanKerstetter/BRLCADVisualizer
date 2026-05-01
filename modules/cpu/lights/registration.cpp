@@ -1,6 +1,3 @@
-// Copyright 2020 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "AmbientLight.h"
 #include "CylinderLight.h"
 #include "DirectionalLight.h"

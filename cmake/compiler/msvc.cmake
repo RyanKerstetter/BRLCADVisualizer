@@ -1,6 +1,3 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 set(COMMON_CXX_FLAGS "/EHsc /MP /GR /bigobj")
 
 set(CMAKE_CXX_FLAGS_DEBUG          "${CMAKE_CXX_FLAGS_DEBUG} ${COMMON_CXX_FLAGS}")

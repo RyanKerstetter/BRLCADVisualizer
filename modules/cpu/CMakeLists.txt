@@ -1,6 +1,3 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 option(OSPRAY_MODULE_CPU "Build the CPU module" ON)
 mark_as_advanced(OSPRAY_MODULE_CPU)
 

@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "rkcommon/math/box.h"
 #include "rkcommon/os/FileName.h"
 #include "rkcommon/tasking/parallel_for.h"

@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wundefined-func-template"
 

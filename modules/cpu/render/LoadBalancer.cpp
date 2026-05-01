@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "LoadBalancer.h"
 #include "camera/Camera.h"
 #include "common/World.h"

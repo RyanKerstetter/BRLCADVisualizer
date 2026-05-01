@@ -1,6 +1,3 @@
-// Copyright 2023 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #ifdef SYCL_LANGUAGE_VERSION
 
 #include <ospray/ospray_util.h>

@@ -1,6 +1,3 @@
-// Copyright 2017 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "test_fixture.h"
 #include "ArcballCamera.h"
 #include "ospray_testing.h"

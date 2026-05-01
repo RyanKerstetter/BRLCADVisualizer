@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 // No pragma once because this struct is defined twice, both in `ospray` and
 // `ispc` namespace
 

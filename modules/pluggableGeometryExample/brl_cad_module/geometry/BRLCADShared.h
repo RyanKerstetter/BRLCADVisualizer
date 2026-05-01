@@ -1,6 +1,3 @@
-// Copyright 2009-2024 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #pragma once
 
 #ifdef __cplusplus
@@ -20,9 +17,7 @@ struct BRLCAD_sh
   uint32 colorEnabled;
 
 #ifdef __cplusplus
-  BRLCAD_sh()
-      : brlcadSelf(nullptr), colorEnabled(1)
-  {}
+  BRLCAD_sh() : brlcadSelf(nullptr), colorEnabled(1) {}
 #endif
 };
 

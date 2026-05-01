@@ -1,6 +1,3 @@
-// Copyright 2022 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "SparseFB.ih"
 #include "fb/FrameBuffer.ih"
 #include "fb/RenderTaskDesc.ih"

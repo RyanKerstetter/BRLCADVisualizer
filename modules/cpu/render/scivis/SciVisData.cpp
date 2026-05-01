@@ -1,6 +1,3 @@
-// Copyright 2021 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "SciVisData.h"
 #include "common/Instance.h"
 #include "common/World.h"

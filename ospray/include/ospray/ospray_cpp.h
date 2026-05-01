@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 // \file ospray/ospray.h Defines the external OSPRay API */
 
 // NOTE: this is a single include for all the C++ wrappers around ospray.h

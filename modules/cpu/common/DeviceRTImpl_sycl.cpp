@@ -1,6 +1,3 @@
-// Copyright 2024 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "DeviceRTImpl_sycl.h"
 
 namespace ospray {

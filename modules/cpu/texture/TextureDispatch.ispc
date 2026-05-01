@@ -1,6 +1,3 @@
-// Copyright 2022 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "common/DifferentialGeometry.ih"
 #include "texture/Texture2D.ih"
 #include "texture/TextureVolume.ih"

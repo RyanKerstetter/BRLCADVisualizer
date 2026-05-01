@@ -1,6 +1,3 @@
-// Copyright 2018 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "GLFWOSPRayWindow.h"
 #include "example_common.h"
 

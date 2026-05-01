@@ -1,6 +1,3 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 cmake_dependent_option(
   OSPRAY_APPS_ENABLE_GLM
   "Build ospray_cpp glm tests/tutorial"

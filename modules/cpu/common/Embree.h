@@ -1,6 +1,3 @@
-// Copyright 2022 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #pragma once
 
 #ifdef OSPRAY_TARGET_SYCL

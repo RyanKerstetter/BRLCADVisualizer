@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "Glass.h"
 #ifndef OSPRAY_TARGET_SYCL
 // ispc

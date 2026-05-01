@@ -1,6 +1,3 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 ## Options ##
 
 set(OSPRAY_MPI_COMPRESSION_THRESHOLD 16 CACHE STRING

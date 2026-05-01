@@ -1,6 +1,3 @@
-// Copyright 2018 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 /* This larger example shows how to use the MPIDistributedDevice to write an
  * interactive rendering application, which shows a UI on rank 0 and uses
  * all ranks in the MPI world for data loading and rendering. This example

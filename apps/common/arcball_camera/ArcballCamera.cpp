@@ -1,6 +1,3 @@
-// Copyright 2017 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "ArcballCamera.h"
 
 ArcballCamera::ArcballCamera(const rkcommon::math::box3f &worldBounds,

@@ -1,6 +1,3 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 set(OSPRAY_VERSION_MAJOR 3)
 set(OSPRAY_VERSION_MINOR 3)
 set(OSPRAY_VERSION_PATCH 0)

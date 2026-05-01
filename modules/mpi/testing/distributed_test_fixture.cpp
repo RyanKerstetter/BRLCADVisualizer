@@ -1,6 +1,3 @@
-// Copyright 2021 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "distributed_test_fixture.h"
 #include <mpi.h>
 #include "ArcballCamera.h"

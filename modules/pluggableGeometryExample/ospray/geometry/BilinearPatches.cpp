@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "BilinearPatches.h"
 // 'export'ed functions from the ispc file:
 #include "geometry/BilinearPatches_ispc.h"

@@ -1,6 +1,3 @@
-// Copyright 2021 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "test_fixture.h"
 
 namespace MPIDistribOSPRayTestScenes {

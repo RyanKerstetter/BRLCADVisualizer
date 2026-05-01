@@ -1,6 +1,3 @@
-// Copyright 2020 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "Builder.h"
 #include "ospray_testing.h"
 #include "rkcommon/utility/multidim_index_sequence.h"

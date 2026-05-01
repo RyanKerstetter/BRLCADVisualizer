@@ -1,6 +1,3 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 set(CMAKE_INSTALL_SCRIPTDIR scripts)
 if (OSPRAY_ZIP_MODE)
   # in tgz / zip let's have relative RPath

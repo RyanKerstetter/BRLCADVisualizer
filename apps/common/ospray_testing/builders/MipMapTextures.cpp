@@ -1,6 +1,3 @@
-// Copyright 2023 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "Builder.h"
 #include "ospray_testing.h"
 

@@ -1,6 +1,3 @@
-// Copyright 2021 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include <mpi.h>
 #include "distributed_test_fixture.h"
 #include "rkcommon/utility/getEnvVar.h"

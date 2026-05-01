@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "Texture2D.h"
 #ifndef OSPRAY_TARGET_SYCL
 #include "texture/Texture2D_ispc.h"

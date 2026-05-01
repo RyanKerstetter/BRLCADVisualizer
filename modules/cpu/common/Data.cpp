@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 // ospray
 #include "Data.h"
 #include "ospray/ospray.h"

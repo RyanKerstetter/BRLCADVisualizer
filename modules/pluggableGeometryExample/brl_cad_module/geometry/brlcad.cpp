@@ -1,19 +1,3 @@
-// ======================================================================== //
-// Copyright 2009-2018 Intel Corporation                                    //
-//                                                                          //
-// Licensed under the Apache License, Version 2.0 (the "License");          //
-// you may not use this file except in compliance with the License.         //
-// You may obtain a copy of the License at                                  //
-//                                                                          //
-//     http://www.apache.org/licenses/LICENSE-2.0                           //
-//                                                                          //
-// Unless required by applicable law or agreed to in writing, software      //
-// distributed under the License is distributed on an "AS IS" BASIS,        //
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. //
-// See the License for the specific language governing permissions and      //
-// limitations under the License.                                           //
-// ======================================================================== //
-
 #include "brlcad.h"
 
 #include <atomic>
@@ -71,7 +55,8 @@ static inline int getNumThreads()
 
 static constexpr bool kVerboseBRLCADLogging = false;
 
-static unsigned int currentContextInstID(const RTCIntersectFunctionNArguments *args)
+static unsigned int currentContextInstID(
+    const RTCIntersectFunctionNArguments *args)
 {
   if (!args || !args->context)
     return RTC_INVALID_GEOMETRY_ID;
@@ -82,7 +67,8 @@ static unsigned int currentContextInstID(const RTCIntersectFunctionNArguments *a
   return args->context->instID[0];
 }
 
-static inline uint32_t packRegionColor(float r, float g, float b, float a = 1.0f)
+static inline uint32_t packRegionColor(
+    float r, float g, float b, float a = 1.0f)
 {
   const auto toByte = [](float v) -> uint32_t {
     const float clamped = std::max(0.0f, std::min(1.0f, v));
@@ -93,14 +79,15 @@ static inline uint32_t packRegionColor(float r, float g, float b, float a = 1.0f
 
 static inline uint32_t fallbackRegionColor()
 {
-  // DEBUG: bright red so we can tell if postIntersect runs but ma_color_valid is 0
+  // DEBUG: bright red so we can tell if postIntersect runs but ma_color_valid
+  // is 0
   return packRegionColor(1.0f, 0.0f, 0.0f, 1.0f);
 }
 
 // ---------------------------------------------------------------------------
 // Embree ray-packet helpers
 // ---------------------------------------------------------------------------
-
+// This just retrieves ray i from the args and stores it in rayhit
 inline static void getRay(
     void *rayhitN, unsigned int N, unsigned int i, RTCRayHit &rayhit)
 {
@@ -142,7 +129,7 @@ inline static void setRay(
   RTCHitN *hitN = RTCRayHitN_HitN(rays, N);
 
   RTCRayN_tfar(rayN, N, i) = ray.tfar;
-
+  // put the brlcad ray information into embree ray
   if (hit.geomID != RTC_INVALID_GEOMETRY_ID) {
     RTCHitN_Ng_x(hitN, N, i) = hit.Ng_x;
     RTCHitN_Ng_y(hitN, N, i) = hit.Ng_y;
@@ -210,15 +197,16 @@ static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit, unsigned int geomID)
   auto &ray = rayhit.ray;
   auto &hit = rayhit.hit;
   application ap;
-
+  // rtexample.c
   RT_APPLICATION_INIT(&ap);
 
   ap.a_rt_i = geom.rtip;
   ap.a_onehit = 1;
   const size_t resourceIndex =
       geom.resources.empty() ? 0 : (size_t(getCpuId()) % geom.resources.size());
-  ap.a_resource =
-      geom.resources.empty() ? nullptr : const_cast<resource *>(&geom.resources[resourceIndex]);
+  ap.a_resource = geom.resources.empty()
+      ? nullptr
+      : const_cast<resource *>(&geom.resources[resourceIndex]);
   ap.a_user = static_cast<int>(geomID);
 
   VSET(ap.a_ray.r_pt, ray.org_x, ray.org_y, ray.org_z);
@@ -226,15 +214,15 @@ static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit, unsigned int geomID)
   ap.a_ray.r_min = ray.tnear;
   ap.a_ray.r_max = ray.tfar;
 
-  ap.a_hit = hitCallback;
-  ap.a_miss = missCallback;
+  ap.a_hit = hitCallback; // called on hit
+  ap.a_miss = missCallback; // called on miss
   ap.a_logoverlap = rt_silent_logoverlap;
-  ap.a_uptr = &rayhit;
+  ap.a_uptr = &rayhit; // where the actual ray is stored
 
   // Reset hit info so misses cannot leak stale data.
   hit.geomID = RTC_INVALID_GEOMETRY_ID;
   hit.primID = RTC_INVALID_GEOMETRY_ID;
-
+  // shoot the ray
   auto didHit = rt_shootray(&ap);
   if (didHit <= 0) {
     hit.geomID = RTC_INVALID_GEOMETRY_ID;
@@ -247,6 +235,7 @@ static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit, unsigned int geomID)
 // Embree bounds callback
 // geometryUserPtr = getSh() = ispc::BRLCAD_sh*  (set by
 // createEmbreeUserGeometry)
+// Compute the bounds of a BRL-CAD object
 // ---------------------------------------------------------------------------
 
 static void brlcadBounds(const struct RTCBoundsFunctionArguments *args)
@@ -267,20 +256,24 @@ static void brlcadBounds(const struct RTCBoundsFunctionArguments *args)
 // ---------------------------------------------------------------------------
 // C bridge called from ISPC BRLCAD_intersect.
 // args->geometryUserPtr = getSh() = BRLCAD_sh* (not used here; geom via self)
+// If intersection with BRL-CAD object, then call BRL-CAD raytracing
+// functionallity
 // ---------------------------------------------------------------------------
 
 extern "C" void brlcadIntersectN_C(void *self,
     const RTCIntersectFunctionNArguments *args,
     bool isOcclusionTest)
 {
-  const BRLCAD *geom = static_cast<const BRLCAD *>(self);
+  // args points to a bunch of rays
+  const BRLCAD *geom = static_cast<const BRLCAD *>(
+      self); // pointer to custom geometry (BRL-CAD object)
 
   const unsigned int N = args->N;
   const unsigned int geomID = args->geomID;
 
   if (isOcclusionTest) {
     // args was actually RTCOccludedFunctionNArguments* cast to intersect args.
-    // The 'rayhit' field maps to 'ray' in the occluded struct.
+    // The rayhit field maps to ray in the occluded struct.
     RTCRayN *rayN = (RTCRayN *)args->rayhit;
     for (unsigned int i = 0; i < N; ++i) {
       if (args->valid && !args->valid[i])
@@ -312,10 +305,14 @@ extern "C" void brlcadIntersectN_C(void *self,
   } else {
     for (unsigned int i = 0; i < N; ++i) {
       if (!args->valid || args->valid[i]) {
-        RTCRayHit rayhit;
+        RTCRayHit rayhit; // stores the ray information
+        // retrieve the ray information from Embree
         getRay(args->rayhit, N, i, rayhit);
         rayhit.hit.instID[0] = currentContextInstID(args);
+        // rayhit gives us the information from the ray hitting the object
         traceRay(*geom, rayhit, geomID);
+        // rayhit - the ray with information from BRL-CAD, args, stors the rays
+        // from embree
         setRay(rayhit, args->rayhit, N, i);
       }
     }
@@ -419,7 +416,8 @@ void BRLCAD::commit()
 
       if (reg->reg_mater.ma_color_valid) {
         ++coloredRegions;
-        fprintf(stderr, "  region[%zu] '%s' color=(%.2f, %.2f, %.2f)\n",
+        fprintf(stderr,
+            "  region[%zu] '%s' color=(%.2f, %.2f, %.2f)\n",
             i,
             reg->reg_name ? reg->reg_name : "?",
             reg->reg_mater.ma_color[0],
@@ -428,8 +426,10 @@ void BRLCAD::commit()
       }
     }
   }
-  fprintf(stderr, "BRLCAD: %zu regions total, %d have colors\n",
-      rtip->nregions, coloredRegions);
+  fprintf(stderr,
+      "BRLCAD: %zu regions total, %d have colors\n",
+      rtip->nregions,
+      coloredRegions);
 
   bounds.lower.x = rtip->mdl_min[0];
   bounds.lower.y = rtip->mdl_min[1];
@@ -451,6 +451,7 @@ void BRLCAD::commit()
 
   getSh()->brlcadSelf = this;
   getSh()->colorEnabled = colorEnabled ? 1u : 0u;
+  // set the bounds function
   createEmbreeUserGeometry((RTCBoundsFunction)brlcadBounds);
 
   getSh()->super.numPrimitives = static_cast<int>(numPrimitives());

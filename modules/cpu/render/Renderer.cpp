@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 // ospray
 #include "Renderer.h"
 #include "LoadBalancer.h"

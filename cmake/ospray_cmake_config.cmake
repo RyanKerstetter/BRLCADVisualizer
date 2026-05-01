@@ -1,6 +1,3 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 # Version header
 configure_file(
   ${CMAKE_SOURCE_DIR}/ospray/version.h.in

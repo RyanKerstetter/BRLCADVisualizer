@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 // must be first
 #define OSPRAY_RKCOMMON_DEFINITIONS
 #include "ospray/ospray_cpp/ext/rkcommon.h"

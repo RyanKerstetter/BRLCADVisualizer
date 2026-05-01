@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "fb/FrameOp.h"
 // ispc shared
 #include "ToneMapperShared.h"

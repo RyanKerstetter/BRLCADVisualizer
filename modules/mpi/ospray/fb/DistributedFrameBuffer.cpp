@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "DistributedFrameBuffer.h"
 #include "DistributedFrameBuffer_TileMessages.h"
 #include "ISPCDevice.h"

@@ -1,6 +1,3 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 set(COMPONENT_NAME embree)
 
 set(COMPONENT_PATH ${INSTALL_DIR_ABSOLUTE})

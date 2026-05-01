@@ -1,6 +1,3 @@
-// Copyright 2018 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 /* This tutorial demonstrates how MPI-parallel applications can be
  * written which still render replicated data using the path tracer
  * for secondary effects. Applications can leverage MPI parallelism for

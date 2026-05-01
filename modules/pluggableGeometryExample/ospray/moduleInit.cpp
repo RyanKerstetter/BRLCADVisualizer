@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 /*! \file ospray/moduleInit \brief Defines the module initialization callback */
 
 #include "geometry/BilinearPatches.h"

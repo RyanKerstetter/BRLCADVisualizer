@@ -1,6 +1,3 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 # additional target to run clang-format on all source files
 
 set (EXCLUDE_DIRS

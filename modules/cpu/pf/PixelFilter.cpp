@@ -1,6 +1,3 @@
-// Copyright 2020 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 // ospray
 #include "PixelFilter.h"
 #include "ISPCDevice.h"

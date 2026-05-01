@@ -1,6 +1,3 @@
-## Copyright 2021 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 set(COMPONENT_NAME gtest)
 
 set(COMPONENT_PATH ${INSTALL_DIR_ABSOLUTE})

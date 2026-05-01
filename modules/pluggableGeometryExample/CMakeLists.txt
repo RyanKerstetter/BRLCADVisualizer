@@ -1,6 +1,3 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 # Define an option to enable/disable this module.
 #
 # Though not actually required we guard each module 'moduleName' with

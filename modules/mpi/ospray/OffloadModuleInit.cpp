@@ -1,6 +1,3 @@
-// Copyright 2022 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 // We don't want an instance of ObjectFactory static table in this library so
 // we set OBJECTFACTORY_IMPORT at the CMake build flag level for the module
 #include "common/ObjectFactory.h"

@@ -1,6 +1,3 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 # this subdirectory builds the actual ospray plugin into a library
 # "libospray_module_<modulename>.so".
 #

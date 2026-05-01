@@ -1,6 +1,3 @@
-## Copyright 2022 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 # FIXME CMake does not always set "-x c++" to compile .ispc files as C++ (SYCL)
 # code, despite LANGUAGE is set for them
 set(OSPRAY_COMPILER_NEEDS_X_CPP TRUE)

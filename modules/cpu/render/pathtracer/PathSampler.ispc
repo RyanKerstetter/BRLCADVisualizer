@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "render/pathtracer/GeometryLight.ih"
 #include "render/pathtracer/NextEventEstimation.ih"
 #include "render/pathtracer/PathSampler.ih"

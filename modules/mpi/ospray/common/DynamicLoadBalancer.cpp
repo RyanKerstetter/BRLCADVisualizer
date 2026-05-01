@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 // This code is for DynamicLoadBalancer using the lifeline scheduling method
 
 #include "DynamicLoadBalancer.h"

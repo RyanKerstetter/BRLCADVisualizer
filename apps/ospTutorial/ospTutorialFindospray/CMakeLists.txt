@@ -1,6 +1,3 @@
-## Copyright 2019 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 # NOTE: This CMakeLists.txt is intended to be used to exercise an OSPRay
 #       install and demonstrate how external applications can build against
 #       OSPRay using CMake.

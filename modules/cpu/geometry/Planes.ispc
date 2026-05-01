@@ -1,6 +1,3 @@
-// Copyright 2019 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 // ospray
 #include "common/Data.ih"
 #include "common/DifferentialGeometry.ih"

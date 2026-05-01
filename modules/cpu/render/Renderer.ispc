@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 // TODO: Seems like ISPC bug: if Renderer.ih included before
 // Texture2D.ih I get an error that the Texture2D type is declared but not
 // defined

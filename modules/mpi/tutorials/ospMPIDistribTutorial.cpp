@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 /* This is a small example tutorial how to use OSPRay and the
  * MPIDistributedDevice in a data-parallel application.
  * Each rank must specify the same render parameters, however the data

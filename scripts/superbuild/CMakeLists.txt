@@ -1,6 +1,3 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
-
 ## Global settings ##
 
 cmake_minimum_required(VERSION 3.7)

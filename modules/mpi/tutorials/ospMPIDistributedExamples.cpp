@@ -1,6 +1,3 @@
-// Copyright 2021 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 /* This example generates the same data on each rank so that we can build
  * off the existing OSPRay testing data generators, however each rank
  * specifies a subregion as its local domain to render the data as if it was

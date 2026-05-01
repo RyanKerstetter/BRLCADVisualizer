@@ -1,6 +1,3 @@
-// Copyright 2020 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "math/spectrum.h"
 #include "render/Material.h"
 // ispc shared

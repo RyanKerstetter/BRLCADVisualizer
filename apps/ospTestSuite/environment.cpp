@@ -1,6 +1,3 @@
-// Copyright 2017 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "environment.h"
 
 #ifdef SYCL_LANGUAGE_VERSION

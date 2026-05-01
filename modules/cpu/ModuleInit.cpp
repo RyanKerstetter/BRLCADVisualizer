@@ -1,6 +1,3 @@
-// Copyright 2022 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 // We don't want an instance of ObjectFactory static table in this library
 // so we have to include it with import define so the table will be imported
 // from 'ospray' library

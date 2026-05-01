@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "common/DeviceRT.ih"
 #include "rkcommon/math/LinearSpace.ih"
 #include "rkcommon/math/vec.ih"

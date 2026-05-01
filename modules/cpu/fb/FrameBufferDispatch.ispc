@@ -1,6 +1,3 @@
-// Copyright 2022 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "common/FeatureFlagsEnum.h"
 #include "fb/FrameBufferDispatch.ih"
 #include "fb/LocalFB.ih"

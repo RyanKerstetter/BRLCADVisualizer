@@ -1,6 +1,3 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 #include "common/DifferentialGeometry.ih"
 // c++ shared
 #include "LightShared.h"
