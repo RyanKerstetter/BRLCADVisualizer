@@ -1,3 +1,6 @@
+# Copyright (c) 2026 BRL-CAD Visualizer contributors
+# SPDX-License-Identifier: MIT
+
 param(
     [string]$BuildDir = (Join-Path $PSScriptRoot "build-clean"),
     [string]$OutputDir = "",

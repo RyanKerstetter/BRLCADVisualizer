@@ -57,7 +57,7 @@ The main moving parts are:
 
 At runtime the typical flow is:
 
-1. `IBRT` starts.
+1. `IBRT` (Interactive BRL-CAD Ray Tracer) starts.
 2. OSPRay is initialized and the CPU device is created.
 3. The main Qt window starts.
 4. The UI launches `IBRTRenderWorker.exe`.
@@ -809,13 +809,18 @@ If you want to modify behavior, these are the most important starting points:
 
 ## Licensing And Third-Party Material
 
-See:
+BRL-CAD Visualizer / IBRT project code is licensed under the MIT License. See:
+
+- `LICENSE`
+
+The repository also includes upstream OSPRay source and third-party notices.
+Those files keep their original license terms. See:
 
 - `LICENSE.txt`
 - `third-party-programs.txt`
 - other `third-party-programs-*.txt` files
 
-for the licensing and attribution details associated with included third-party code and dependencies.
+Do not replace upstream OSPRay/Intel headers with the project MIT header.
 
 ## Final Summary
 

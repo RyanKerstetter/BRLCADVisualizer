@@ -1,3 +1,6 @@
+## Copyright (c) 2026 BRL-CAD Visualizer contributors
+## SPDX-License-Identifier: MIT
+
 cmake_minimum_required(VERSION 3.20)
 project(ospray_module_brl_cad CXX)
 
