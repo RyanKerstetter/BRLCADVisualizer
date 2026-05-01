@@ -167,7 +167,7 @@ static void installCrashDumpHandler()
 static void osprayErrorCallback(void *, OSPError error, const char *message)
 {
   fprintf(stderr,
-      "OSPRAY ERROR %d: %s\n",
+      "OSPRAY ERROR %d: %s\n",  
       (int)error,
       message ? message : "(null)");
   fflush(stderr);

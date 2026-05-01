@@ -24,7 +24,7 @@ class MainWindow : public QMainWindow
   // Menu helpers keep startup/demo logic out of the constructor.
   void setupMenus();
   void updateBrlcadMenuState();
-  void chooseAndLoadBrlcadObject(const QString &path, const QStringList &objects);
+  void chooseAndLoadBrlcadObject(const QString &path);
   QString demoModelsDir() const;
   void populateDemoModelsMenu(QMenu *menu);
   QString defaultDemoPath() const;

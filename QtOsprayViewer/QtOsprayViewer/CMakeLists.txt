@@ -1,5 +1,18 @@
 cmake_minimum_required(VERSION 3.20)
 project(IBRT VERSION 0.1 LANGUAGES CXX)
+set(IBRT_RENDER_WORKER_DEFAULT OFF)
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(IBRT_RENDER_WORKER_DEFAULT ON)
+endif()
+option(IBRT_ENABLE_RENDER_WORKER "Build the out-of-process render worker" ${IBRT_RENDER_WORKER_DEFAULT})
+
+set(IBRT_BUILD_RENDER_WORKER ${IBRT_ENABLE_RENDER_WORKER})
+if(IBRT_ENABLE_RENDER_WORKER AND NOT (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+    message(STATUS "IBRT render worker is supported only on Windows and Linux; this build will use in-process rendering only.")
+    set(IBRT_BUILD_RENDER_WORKER OFF)
+elseif(NOT IBRT_ENABLE_RENDER_WORKER)
+    message(STATUS "IBRT render worker target is disabled; the viewer will use local rendering only.")
+endif()
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
@@ -119,13 +132,15 @@ qt_add_executable(QtOsprayViewer
     worker_ipc.h
 )
 
-add_executable(IBRTRenderWorker
-    worker_main.cpp
-    ospraybackend.cpp
-    ospraybackend.h
-    worker_ipc.cpp
-    worker_ipc.h
-)
+if(IBRT_BUILD_RENDER_WORKER)
+    add_executable(IBRTRenderWorker
+        worker_main.cpp
+        ospraybackend.cpp
+        ospraybackend.h
+        worker_ipc.cpp
+        worker_ipc.h
+    )
+endif()
 
 add_executable(IBRTTests
     tests_ibrt.cpp
@@ -171,15 +186,17 @@ target_include_directories(QtOsprayViewer PRIVATE
     $<$<BOOL:${WIN32}>:${TBB_ROOT}/include>
 )
 
-target_include_directories(IBRTRenderWorker PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${OSPRAY_PREFIX}/include"
-    "${RKCOMMON_PREFIX}/include"
-    "${BRLCAD_INCLUDE_DIR}"
-    "${BRLCAD_INCLUDE_DIR}/brlcad"
-    "${BRLCAD_INCLUDE_DIR}/OpenNURBS"
-    $<$<BOOL:${WIN32}>:${TBB_ROOT}/include>
-)
+if(TARGET IBRTRenderWorker)
+    target_include_directories(IBRTRenderWorker PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${OSPRAY_PREFIX}/include"
+        "${RKCOMMON_PREFIX}/include"
+        "${BRLCAD_INCLUDE_DIR}"
+        "${BRLCAD_INCLUDE_DIR}/brlcad"
+        "${BRLCAD_INCLUDE_DIR}/OpenNURBS"
+        $<$<BOOL:${WIN32}>:${TBB_ROOT}/include>
+    )
+endif()
 
 target_include_directories(IBRTTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -206,12 +223,17 @@ target_link_libraries(QtOsprayViewer PRIVATE
     $<$<BOOL:${WIN32}>:dbghelp>
 )
 
-target_link_libraries(IBRTRenderWorker PRIVATE
-    ospray::ospray
-    ${BRLCAD_RT_LIBRARY}
-    ${BRLCAD_BU_LIBRARY}
-    $<$<BOOL:${WIN32}>:TBB::tbb>
-)
+if(TARGET IBRTRenderWorker)
+    target_link_libraries(IBRTRenderWorker PRIVATE
+        ospray::ospray
+        ${BRLCAD_RT_LIBRARY}
+        ${BRLCAD_BU_LIBRARY}
+        $<$<BOOL:${WIN32}>:TBB::tbb>
+    )
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(IBRTRenderWorker PRIVATE Qt6::Core)
+    endif()
+endif()
 
 target_link_libraries(IBRTTests PRIVATE
     Qt6::Test
@@ -223,7 +245,7 @@ target_link_libraries(IBRTTests PRIVATE
     $<$<BOOL:${WIN32}>:TBB::tbb>
 )
 
-if(WIN32)
+if(WIN32 AND TARGET IBRTRenderWorker)
     set(TBB_REDIST_DIR "${TBB_ROOT}/redist/intel64/vc14")
 
     add_custom_command(TARGET IBRTRenderWorker POST_BUILD
@@ -447,6 +469,8 @@ if(WIN32)
     add_custom_command(TARGET IBRTTests POST_BUILD
         COMMAND "${WINDEPLOYQT}" "$<TARGET_FILE:IBRTTests>"
         COMMENT "Running windeployqt for tests...")
+elseif(WIN32)
+    message(STATUS "IBRT render worker target is disabled; the viewer will use local rendering only.")
 endif()
 
 add_test(NAME IBRTTests COMMAND IBRTTests)

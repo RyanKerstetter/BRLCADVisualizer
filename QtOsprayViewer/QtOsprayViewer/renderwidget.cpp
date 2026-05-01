@@ -1195,9 +1195,17 @@ bool RenderWidget::loadBrlcadModel(const QString &path, const QString &topObject
     return false;
   }
 
-  const QString resolvedObject =
-      topObject.trimmed().isEmpty() ? QStringLiteral("all") : topObject.trimmed();
   const QStringList availableObjects = listBrlcadObjects(path);
+  const QString resolvedObject = topObject.trimmed().isEmpty()
+      ? (availableObjects.isEmpty() ? QString() : availableObjects.front())
+      : topObject.trimmed();
+
+  if (resolvedObject.isEmpty()) {
+    lastError_ = QStringLiteral("No selectable BRL-CAD objects were found in this .g file.");
+    currentBrlcadObjects_ = availableObjects;
+    return false;
+  }
+
   currentBrlcadObjects_ = availableObjects;
 
   startAsyncLoad(
@@ -1272,6 +1280,15 @@ QStringList RenderWidget::listBrlcadObjects(const QString &path) const
   } catch (...) {
   }
   return out;
+}
+
+std::vector<OsprayBackend::BrlcadNode> RenderWidget::brlcadHierarchy(const QString &path) const
+{
+  try {
+    return backend_.getBrlcadHierarchy(path.toStdString());
+  } catch (...) {
+  }
+  return {};
 }
 
 // Reloads the current BRL-CAD database with a different selected top-level object.
@@ -1851,6 +1868,14 @@ void RenderWidget::stopWorkerPolling()
     workerPollThread_.join();
 }
 
+
+/*
+WorkerpollingLoop
+Runs in a background thread.
+Sends queued commands to the worker.
+Requests frames.
+Stores returned images.
+*/
 void RenderWidget::workerPollingLoop()
 {
   while (workerPollRunning_.load()) {

@@ -58,6 +58,7 @@ class RenderWidget : public QOpenGLWidget, protected QOpenGLFunctions
   bool loadModel(const QString &path);
   bool loadBrlcadModel(const QString &path, const QString &topObject = QString());
   QStringList listBrlcadObjects(const QString &path) const;
+  std::vector<OsprayBackend::BrlcadNode> brlcadHierarchy(const QString &path) const;
   bool reloadBrlcadObject(const QString &topObject);
   QString lastError() const;
   void resetView();

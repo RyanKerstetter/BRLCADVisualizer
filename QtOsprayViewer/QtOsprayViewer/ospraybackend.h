@@ -54,6 +54,7 @@ class OsprayBackend
   bool loadObj(const std::string &path);
   bool loadBrlcad(const std::string &path, const std::string &topObject = "");
   std::vector<std::string> listBrlcadObjects(const std::string &path) const;
+  std::vector<BrlcadNode> getBrlcadHierarchy(const std::string &path) const;
   std::vector<BrlcadNode> listBrlcadHierarchy(const std::string &path) const;
   void loadTestMesh();
 

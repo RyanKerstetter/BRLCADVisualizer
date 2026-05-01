@@ -5,11 +5,12 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(__linux__)
+#include <QtCore/qglobal.h>
 #endif
 
 namespace ibrt::ipc {
 
-// Message types are shared by the viewer process and the render worker.
 enum class MessageType : uint32_t
 {
   Ping = 1,
@@ -33,7 +34,7 @@ enum class MessageType : uint32_t
 
 struct MessageHeader
 {
-  uint32_t magic = 0x54425249; // IBRT
+  uint32_t magic = 0x54425249;
   uint32_t version = 1;
   uint32_t type = 0;
   uint64_t requestId = 0;
@@ -47,13 +48,14 @@ struct Message
   std::string payload;
 };
 
-// The pipe name is keyed by the UI process ID so a viewer instance talks only
-// to its own worker.
 std::string makePipeName(uint32_t processId);
 
 #ifdef _WIN32
 bool writeMessage(HANDLE pipe, const Message &message);
 bool readMessage(HANDLE pipe, Message &message);
+#elif defined(__linux__)
+bool writeMessage(qintptr fd, const Message &message);
+bool readMessage(qintptr fd, Message &message);
 #endif
 
 } // namespace ibrt::ipc

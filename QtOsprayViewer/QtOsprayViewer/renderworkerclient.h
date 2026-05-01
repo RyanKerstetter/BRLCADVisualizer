@@ -13,6 +13,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(__linux__)
+class QLocalSocket;
 #endif
 
 class RenderWorkerClient : public QObject
@@ -20,7 +22,6 @@ class RenderWorkerClient : public QObject
   Q_OBJECT
 
  public:
-  // A frame packet mirrors what the worker returns over the named pipe.
   struct FrameResult
   {
     QImage image;
@@ -65,16 +66,17 @@ class RenderWorkerClient : public QObject
   explicit RenderWorkerClient(QObject *parent = nullptr);
   ~RenderWorkerClient() override;
 
-  // Process and IPC lifecycle.
+  static bool isSupported();
+  static QString executableFileName();
+  static QString defaultWorkerPath(const QString &applicationDirPath);
+
   bool start(const QString &workerPath);
   void stop();
   bool isConnected() const;
   QString lastError() const;
-  // Scene-management requests.
   QStringList listBrlcadObjects(const QString &path);
   SceneLoadResult loadObj(const QString &path);
   SceneLoadResult loadBrlcad(const QString &path, const QString &objectName);
-  // Render-control requests.
   bool resize(int width, int height);
   bool setCamera(const rkcommon::math::vec3f &eye,
       const rkcommon::math::vec3f &center,
@@ -92,8 +94,6 @@ class RenderWorkerClient : public QObject
 
  private:
 #ifdef _WIN32
-  // IPC helpers. All requests are serialized behind requestMutex_ because the
-  // worker protocol is strictly request/response over a single pipe.
   bool connectPipe();
   bool sendPing();
   bool sendRequest(uint32_t type, const QString &payload, QString *responsePayload);
@@ -102,6 +102,16 @@ class RenderWorkerClient : public QObject
       std::string *responsePayload);
   void closePipe();
   HANDLE pipe_ = INVALID_HANDLE_VALUE;
+#elif defined(__linux__)
+  bool connectSocket();
+  bool sendPing();
+  bool sendRequest(uint32_t type, const QString &payload, QString *responsePayload);
+  bool sendRequestBytes(uint32_t type,
+      const std::string &payload,
+      std::string *responsePayload);
+  void closeSocket();
+  QLocalSocket *socket_ = nullptr;
+  qintptr socketDescriptor_ = -1;
 #endif
   QProcess *process_ = nullptr;
   QString workerPath_;
