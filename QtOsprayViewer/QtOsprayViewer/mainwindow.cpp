@@ -1,3 +1,6 @@
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
 #include "mainwindow.h"
 #include "renderwidget.h"
 #include "renderworkerclient.h"
@@ -198,7 +201,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
       this,
       [this](bool connected) {
         if (connected) {
-          statusBar()->showMessage(QStringLiteral("Render worker connected."));
+          statusBar()->showMessage(workerReconnectPending_
+                  ? QStringLiteral("Render worker reconnected.")
+                  : QStringLiteral("Render worker connected."),
+              2000);
+          workerEverConnected_ = true;
+          workerReconnectPending_ = false;
           renderWidget_->replayWorkerState();
           return;
         }
@@ -206,14 +214,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
         if (!RenderWorkerClient::isSupported())
           return;
 
-        statusBar()->showMessage(QStringLiteral("Render worker disconnected. Restarting..."));
+        if (workerEverConnected_)
+          workerReconnectPending_ = true;
+        statusBar()->showMessage(QStringLiteral("Render worker disconnected. Restarting..."), 1500);
         // If the worker dies, try to restore the previous viewport state after
         // reconnecting so the user does not have to manually recover.
         QTimer::singleShot(500, this, [this]() {
           if (renderWorkerClient_->isConnected())
             return;
           if (renderWorkerClient_->restart()) {
-            statusBar()->showMessage(QStringLiteral("Render worker reconnected."));
             renderWidget_->replayWorkerState();
           } else {
             statusBar()->showMessage(
@@ -232,7 +241,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     statusBar()->showMessage(
         QStringLiteral("Render worker unavailable: %1").arg(renderWorkerClient_->lastError()));
   } else {
-    statusBar()->showMessage(QStringLiteral("Render worker connected."));
+    workerEverConnected_ = true;
+    statusBar()->showMessage(QStringLiteral("Render worker connected."), 2000);
   }
 
   setupMenus();

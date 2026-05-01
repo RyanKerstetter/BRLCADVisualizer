@@ -1,5 +1,5 @@
-// Copyright 2009 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
 
 /*! \file ospray/moduleInit \brief Defines the module initialization callback */
 

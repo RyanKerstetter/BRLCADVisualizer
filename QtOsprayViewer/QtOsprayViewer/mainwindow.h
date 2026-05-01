@@ -1,3 +1,6 @@
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
 #pragma once
 
 #include <QMainWindow>
@@ -18,6 +21,8 @@ class MainWindow : public QMainWindow
   RenderWidget *renderWidget_ = nullptr;
   // Optional out-of-process renderer used to keep heavy rendering work off the UI thread.
   RenderWorkerClient *renderWorkerClient_ = nullptr;
+  bool workerEverConnected_ = false;
+  bool workerReconnectPending_ = false;
   QAction *selectBrlcadObjectAction_ = nullptr;
   QAction *orbitModeAction_ = nullptr;
   QAction *flyModeAction_ = nullptr;

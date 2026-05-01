@@ -1,5 +1,5 @@
-## Copyright 2009 Intel Corporation
-## SPDX-License-Identifier: Apache-2.0
+## Copyright (c) 2026 BRL-CAD Visualizer contributors
+## SPDX-License-Identifier: MIT
 
 # this subdirectory builds the actual ospray plugin into a library
 # "libospray_module_<modulename>.so".

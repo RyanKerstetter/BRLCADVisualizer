@@ -1,3 +1,6 @@
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
 #include <QtTest/QtTest>
 
 #include <cstdio>
@@ -994,8 +997,8 @@ void IbrtTests::unitWorkerIpcRoundTripMessage()
 void IbrtTests::unitRenderWorkflowShouldPreemptWorkerControl()
 {
   QVERIFY(!ibrt::renderworkflow::shouldPreemptWorkerControl(false, 10.0f));
-  QVERIFY(!ibrt::renderworkflow::shouldPreemptWorkerControl(true, 0.5f));
-  QVERIFY(ibrt::renderworkflow::shouldPreemptWorkerControl(true, 0.51f));
+  QVERIFY(!ibrt::renderworkflow::shouldPreemptWorkerControl(true, 2.0f));
+  QVERIFY(ibrt::renderworkflow::shouldPreemptWorkerControl(true, 2.01f));
 }
 
 void IbrtTests::unitRenderWorkflowShouldPreemptWorkerInteractiveCamera()

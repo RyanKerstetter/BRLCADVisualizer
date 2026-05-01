@@ -1,4 +1,7 @@
-﻿#include "renderwidget.h"
+// Copyright (c) 2026 BRL-CAD Visualizer contributors
+// SPDX-License-Identifier: MIT
+
+#include "renderwidget.h"
 
 #include "renderworkerclient.h"
 #include "qualitysettings.h"
@@ -1059,9 +1062,7 @@ void RenderWidget::paintGL()
 
   if (settingsChanged) {
     if (usingWorkerRenderPath()) {
-      if (workerRequestInFlight_.load())
-        restartWorkerAndReplayState();
-      else if (!preemptWorkerControlIfBusy())
+      if (!preemptWorkerControlIfBusy())
         queueWorkerSettings(workerSettings_);
     }
     renderOnce();
