@@ -1,21 +1,12 @@
-# BRLCADVisualizer
+# IBRT
 
-`BRLCADVisualizer` is a Windows-focused interactive raytracing application for viewing BRL-CAD `.g` databases and standard mesh files through Intel OSPRay. This repository is not just a small viewer app. It also contains:
+`Interactive BRL-CAD Ray Tracer (IBRT)` is an interactive graphical raytracing application for viewing BRL-CAD `.g` databases and other geometry files through Intel OSPRay and BRL-CAD ray tracing.  This repository is not just a small viewer app. It also contains:
 
-- a full OSPRay source tree
+- a full OSPRay source tree (fork)
 - a standalone build for a custom `ospray_module_brl_cad` plugin
-- a Qt desktop viewer
+- a Qt desktop viewer application
 - a render worker process used to keep expensive rendering work off the UI thread
 - superbuild scripts for fetching and building OSPRay dependencies
-
-If you are trying to understand "what this repo actually is", the short answer is:
-
-1. OSPRay provides the rendering engine.
-2. A custom BRL-CAD geometry module teaches OSPRay how to render BRL-CAD geometry.
-3. The Qt viewer provides the desktop UI.
-4. A helper worker process performs rendering and scene loading out-of-process.
-
-This README is intended to be the single detailed reference for building, running, and understanding the project.
 
 ## What The Project Does
 
@@ -23,7 +14,6 @@ The viewer can load:
 
 - BRL-CAD `.g` databases
 - OBJ meshes
-- menu placeholders exist for some other model extensions, but the implemented paths are BRL-CAD and OBJ
 
 When a BRL-CAD file is loaded:
 
@@ -38,9 +28,14 @@ When an OBJ file is loaded:
 - the mesh is converted into OSPRay geometry and models
 - the same progressive rendering pipeline is used
 
-## High-Level Architecture
+## Architecture Overview:
 
-The main moving parts are:
+1. OSPRay provides the rendering engine.
+2. A custom BRL-CAD geometry module teaches OSPRay how to render BRL-CAD geometry.
+3. The Qt viewer provides the desktop UI.
+4. A helper worker process performs rendering and scene loading out-of-process.
+
+## Soure Overview
 
 - `QtOsprayViewer/QtOsprayViewer`
   This is the desktop application and worker executable source.
@@ -77,11 +72,7 @@ The worker exists for responsiveness and isolation.
 - a separate process makes it easier to recover from worker crashes
 - the UI can restart the worker and replay scene/camera state
 
-The viewer still contains a local `OsprayBackend`, but the intended path is to use the worker when available.
-
 ## Repository Layout
-
-This is the practical map of the repository.
 
 ### Main Viewer
 
@@ -146,23 +137,9 @@ To run the viewer successfully on Windows, you need all of these pieces aligned:
 
 The CMake files in this repo are already set up to copy most of the runtime DLLs into the output folder after build.
 
-## Platform Expectations
-
-The current project is clearly optimized for Windows.
-
-Reasons:
-
-- the worker uses Windows named pipes
-- the viewer deploys Windows DLLs after build
-- `windeployqt` is used for Qt packaging
-- crash dump generation uses `dbghelp`
-- some code paths explicitly say the worker currently supports Windows only
-
-You may be able to build portions of the repo elsewhere, but the complete viewer workflow described here is aimed at Windows.
-
 ## Toolchain And Prerequisites
 
-You should have the following installed:
+You should have the following installed for building on Windows (Linux and Mac are on-your-own):
 
 1. Visual Studio 2022
    Required workload: `Desktop development with C++`
@@ -178,7 +155,6 @@ You should also make sure:
 
 - `cmake` is on `PATH`
 - `ispc.exe` is on `PATH`
-- you are consistently using the same MSVC toolchain across dependencies
 
 ## Build Order
 
@@ -187,7 +163,7 @@ The build order matters. Use this order:
 1. Build BRL-CAD
 2. Build OSPRay and dependencies with the superbuild
 3. Build the standalone `ospray_module_brl_cad`
-4. Build the Qt viewer
+4. Build the IBRT Qt viewer
 
 If you skip step 3, the viewer will start but BRL-CAD scene loading will fail because `ospLoadModule("brl_cad")` will not be able to find the module.
 
@@ -273,12 +249,7 @@ What this build does:
 
 OSPRay itself does not natively understand BRL-CAD databases. The module is the bridge.
 
-Without it:
-
-- OBJ loading can still work
-- BRL-CAD `.g` loading will fail
-
-## Step 4: Build The Qt Viewer
+## Step 4: Build The IBRT Qt Viewer
 
 Example:
 
@@ -364,28 +335,10 @@ Use:
 - choose a `.g` file
 - select the desired object from the hierarchy dialog
 
-The code prefers these object names when present:
-
-- `all.g`
-- `all`
-
-If present, demo models may also appear under:
-
-- `File > Demo Models`
-
 The app looks for demo models in:
 
 - `models` next to the application binary
 - or `share/db` under `BRLCAD_INSTALL_PREFIX`
-
-### OBJ
-
-Use:
-
-- `File > Open Model...`
-- choose an `.obj` file
-
-OBJ loading does not require the BRL-CAD module, but still requires the OSPRay runtime stack.
 
 ## Viewer Controls And Interaction Model
 
@@ -676,75 +629,6 @@ After a successful viewer build, the output directory should contain at least:
 - Qt DLLs
 - `ospray_module_brl_cad.dll`
 
-If the app starts but cannot load BRL-CAD scenes, the first thing to check is whether `ospray_module_brl_cad.dll` is present next to the executable or in a location where OSPRay can load it.
-
-## Troubleshooting
-
-### The App Starts But BRL-CAD Scene Loading Fails
-
-Likely causes:
-
-- `ospray_module_brl_cad.dll` was not built
-- the module DLL was not copied next to the executable
-- the module DLL depends on other missing DLLs
-- `BRLCAD_PREFIX` points to the wrong BRL-CAD build/install tree
-
-What to check:
-
-1. Verify `ospray_module_brl_cad.dll` exists.
-2. Verify it is deployed next to `IBRT.exe` and `IBRTRenderWorker.exe`, or in the expected OSPRay module path.
-3. Reconfigure the viewer with `-DBRLCAD_OSPRAY_MODULE_DLL=...`.
-
-### The Worker Fails To Start
-
-Likely causes:
-
-- missing runtime DLLs
-- `IBRTRenderWorker.exe` was not copied next to the viewer
-- a dependency mismatch between OSPRay/rkcommon/Embree/OpenVKL/TBB
-
-What to check:
-
-1. Confirm `IBRTRenderWorker.exe` exists next to `IBRT.exe`.
-2. Confirm the required DLLs are present in the same output folder.
-3. Launch `IBRTRenderWorker.exe` manually from a terminal if needed to inspect basic startup failure behavior.
-
-### The App Runs But Rendering Is Slow Or Stalls
-
-Possible reasons:
-
-- `pathtracer` is selected
-- AO/pixel sample settings are too high
-- the scene is very large or complex
-- the worker is repeatedly hitting watchdog limits
-
-What to do:
-
-- switch to `ao` or `scivis`
-- reduce custom settings if exposed in the overlay
-- verify the worker stays connected
-
-### CRT Or DLL Conflicts
-
-The CMake intentionally removes bundled CRT DLLs copied by some third-party packages because they can conflict with the Qt/MSVC runtime expected on the machine.
-
-If you see odd runtime loader issues:
-
-- make sure the correct Visual Studio runtime is installed
-- rebuild with a consistent toolchain
-- verify that stale DLLs from older builds are not left in the output folder
-
-### `rkcommon.dll` Or `embree4.dll` Mismatch
-
-The CMake explicitly recopies:
-
-- `rkcommon.dll`
-- `embree4.dll`
-
-after other third-party copies because some packages may overwrite them with incompatible versions.
-
-If you see startup or symbol errors, re-check those DLLs first.
-
 ## Development Notes
 
 ### The Repo Contains OSPRay Source
@@ -758,36 +642,6 @@ For the viewer workflow, the practical builds are:
 - `QtOsprayViewer/QtOsprayViewer`
 
 The root `CMakeLists.txt` is the OSPRay project root.
-
-### Why Some Files Look Like OSPRay Internals
-
-Because they are. The repository includes OSPRay source and modules, and the BRL-CAD integration reuses OSPRay SDK/module internals to stay ABI-compatible with the CPU runtime.
-
-### ISPC Requirement
-
-The BRL-CAD module build uses ISPC sources. If ISPC is not installed or not on `PATH`, the module build is expected to fail.
-
-## Suggested First-Time Build Recipe
-
-If you want the simplest practical sequence:
-
-1. Build BRL-CAD.
-2. Run the OSPRay superbuild.
-3. Build and install `ospray_module_brl_cad`.
-4. Build the Qt viewer.
-5. Run `IBRT.exe` from the viewer build output directory.
-
-## Suggested First-Time Verification Checklist
-
-Before debugging deeper issues, verify:
-
-1. `IBRT.exe` launches.
-2. `IBRTRenderWorker.exe` launches automatically.
-3. The status bar says the worker connected.
-4. A demo model loads or an OBJ loads.
-5. A BRL-CAD `.g` file shows an object picker.
-6. Selecting a BRL-CAD object produces an image.
-7. Switching between `ao`, `scivis`, and `pathtracer` changes the output.
 
 ## Where To Extend The Project
 
@@ -819,33 +673,5 @@ Those files keep their original license terms. See:
 - `LICENSE.txt`
 - `third-party-programs.txt`
 - other `third-party-programs-*.txt` files
+- Do not replace upstream OSPRay/Intel headers with the project MIT header.
 
-Do not replace upstream OSPRay/Intel headers with the project MIT header.
-
-## Final Summary
-
-This repository is a hybrid of:
-
-- OSPRay source
-- a BRL-CAD-to-OSPRay geometry module
-- a Qt desktop viewer
-- a worker-based rendering architecture
-
-The shortest reliable mental model is:
-
-- build BRL-CAD
-- build OSPRay dependencies
-- build the BRL-CAD module
-- build the viewer
-- run `IBRT.exe`
-- load `.g` or `.obj` scenes
-
-If you are maintaining the project, the files that matter most for day-to-day work are:
-
-- `QtOsprayViewer/QtOsprayViewer/mainwindow.cpp`
-- `QtOsprayViewer/QtOsprayViewer/renderwidget.cpp`
-- `QtOsprayViewer/QtOsprayViewer/ospraybackend.cpp`
-- `QtOsprayViewer/QtOsprayViewer/renderworkerclient.cpp`
-- `QtOsprayViewer/QtOsprayViewer/worker_main.cpp`
-- `brl_cad_standalone/CMakeLists.txt`
-- `modules/pluggableGeometryExample/brl_cad_module`
