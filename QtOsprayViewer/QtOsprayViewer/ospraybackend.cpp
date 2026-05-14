@@ -68,8 +68,15 @@ bool ensureBrlcadModuleLoaded(std::string &errorOut)
     if (!loaded) {
       loadError =
           "Failed to load BRL-CAD OSPRay module 'brl_cad'. Ensure "
-          "'ospray_module_brl_cad.dll' is deployed in the IBRT runtime folder "
-          "(set BRLCAD_OSPRAY_MODULE_DLL in CMake if needed).";
+#if defined(_WIN32)
+          "'ospray_module_brl_cad.dll'"
+#elif defined(__APPLE__)
+          "'libospray_module_brl_cad.dylib'"
+#else /* linux, bsd */
+          "'libospray_module_brl_cad.so'"
+#endif
+          " is installed as an OSPRay module "
+          "or preloaded with OSPRAY_LOAD_MODULES=brl_cad.";
     }
   }
 
@@ -1653,24 +1660,18 @@ std::vector<OsprayBackend::BrlcadNode> OsprayBackend::getBrlcadHierarchy(
   if (!tmpRtip || !tmpRtip->rti_dbip)
     return roots;
 
-  struct resource localResource = RT_RESOURCE_INIT_ZERO;
-  rt_init_resource(&localResource, 0, tmpRtip);
-
   struct CleanupGuard
   {
     rt_i *rtip = nullptr;
     directory **dpv = nullptr;
-    resource *resp = nullptr;
     ~CleanupGuard()
     {
       if (dpv)
         bu_free(dpv, "db_ls hierarchy roots");
-      if (rtip && resp)
-        rt_clean_resource(rtip, resp);
       if (rtip)
         rt_free_rti(rtip);
     }
-  } cleanup{tmpRtip, nullptr, &localResource};
+  } cleanup{tmpRtip, nullptr};
 
   directory **dpv = nullptr;
   cleanup.dpv = dpv;
@@ -1719,7 +1720,7 @@ std::vector<OsprayBackend::BrlcadNode> OsprayBackend::getBrlcadHierarchy(
 
     struct rt_db_internal intern;
     RT_DB_INTERNAL_INIT(&intern);
-    if (rt_db_get_internal(&intern, dp, tmpRtip->rti_dbip, nullptr, &localResource) < 0) {
+    if (rt_db_get_internal(&intern, dp, tmpRtip->rti_dbip, nullptr) < 0) {
       node.isPrimitive = true;
       return node;
     }
@@ -1782,7 +1783,7 @@ std::vector<OsprayBackend::BrlcadNode> OsprayBackend::getBrlcadHierarchy(
 
     struct rt_db_internal intern;
     RT_DB_INTERNAL_INIT(&intern);
-    if (rt_db_get_internal(&intern, dpv[i], tmpRtip->rti_dbip, nullptr, &localResource) < 0)
+    if (rt_db_get_internal(&intern, dpv[i], tmpRtip->rti_dbip, nullptr) < 0)
       continue;
 
     if (intern.idb_type == ID_COMBINATION) {
