@@ -12,8 +12,10 @@ set(OSPRAY_CMAKECONFIG_DIR
     "${CMAKE_INSTALL_LIBDIR}/cmake/ospray-${OSPRAY_VERSION}")
 
 set(ISPC_VERSION_REQUIRED 1.23.0)
-set(RKCOMMON_VERSION_REQUIRED 1.14.2)
-set(EMBREE_VERSION_REQUIRED 4.3.3)
+#set(RKCOMMON_VERSION_REQUIRED 1.14.2)
+set(RKCOMMON_VERSION_REQUIRED 1.13.0)
+#set(EMBREE_VERSION_REQUIRED 4.3.3)
+set(EMBREE_VERSION_REQUIRED 4.3.2)
 set(OPENVKL_VERSION_REQUIRED 2.0.1)
 set(OIDN_VERSION_REQUIRED 2.3.0)
 set(OSPRAY_IMGUI_GIT_TAG cb16be3a3fc1f9cd146ae24d52b615f8a05fa93d) # v1.90.9
@@ -68,7 +70,7 @@ cmake_dependent_option(
   OFF
 )
 
-option(OSPRAY_ENABLE_VOLUMES "Enable volume rendering using OpenVKL." ON)
+option(OSPRAY_ENABLE_VOLUMES "Enable volume rendering using OpenVKL." OFF)
 
 
 ###########################################################
