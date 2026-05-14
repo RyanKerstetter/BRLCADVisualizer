@@ -56,7 +56,7 @@ endif()
 add_subdirectory(ospray)
 
 ## Modules ##
-add_subdirectory(modules)
+add_subdirectory(brl_cad_standalone)
 
 ## OSPRay sample apps ##
 add_subdirectory(apps)
