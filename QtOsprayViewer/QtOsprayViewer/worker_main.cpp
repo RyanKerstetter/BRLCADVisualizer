@@ -13,7 +13,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -80,10 +80,10 @@ bool readPodPayload(const std::string &payload, T &out)
 
 int main(int argc, char *argv[])
 {
-#if !defined(_WIN32) && !defined(__linux__)
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
   fprintf(stderr, "IBRT render worker currently supports Windows only.\n");
   return 1;
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
   std::string pipeName;
   for (int i = 1; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--pipe") {
