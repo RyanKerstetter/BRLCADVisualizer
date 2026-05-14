@@ -1,0 +1,58 @@
+CLEANUP
+
+* fix up/down pan/slew controls (they're reversed)
+
+* fix BGR vs RGB colors
+
+* fix interruption reloading the model (or perhaps losing connection with the renderer
+
+* refactor color into callback function
+
+* clean up the imgui menu with less
+
+* make imgui more narrow
+
+* clean up logging output with less
+
+* start with 32x32 pixels, test higher levels (consider dynamic)
+
+* test upscale interpolation
+
+* fix fps calculation
+
+* fix scivis (no ao, faster)
+
+* fix delayed ao (start before scale=1)
+
+* consider consolidating orbit+fly key bindings
+
+* fix full screen toggle resetting the view (needs to keep it)
+
+* fix so only dirbuilding/prep once, unless we hard-reset
+
+
+NEW STUFF
+
+* debug overlay console
+
+* BRL-CAD branding in corner
+
+* hotkey to hide the coordinate system
+
+* implement edge renderer in ospray
+
+* implement cut planes
+
+* implement components on shotline
+
+* integrate appleseed renderer into ospray
+
+* analytic integration as color+imgui plugin
+
+* ability to run ged commands
+
+* implement colors on obj load for scivis/pt
+
+* implement stl (and more) loading
+
+* expand loading to libgcv
