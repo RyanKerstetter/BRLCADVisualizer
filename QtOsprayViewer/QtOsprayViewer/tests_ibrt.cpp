@@ -82,23 +82,122 @@ namespace {
 std::optional<QString> makeExampleBrlcadDb()
 {
   static const QString toolPath = QStringLiteral("C:/brlcad-build/bin/wdb_example.exe");
-  if (!QFileInfo::exists(toolPath))
-    return std::nullopt;
-
   const QString dbPath =
       QDir::temp().filePath(QStringLiteral("ibrt_test_example.g"));
   QFile::remove(dbPath);
 
-  QProcess process;
-  process.start(toolPath, {dbPath});
-  if (!process.waitForFinished(10000))
+  if (QFileInfo::exists(toolPath)) {
+    QProcess process;
+    process.start(toolPath, {dbPath});
+    if (!process.waitForFinished(10000))
+      return std::nullopt;
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+      return std::nullopt;
+    if (!QFileInfo::exists(dbPath))
+      return std::nullopt;
+
+    return dbPath;
+  }
+
+#ifdef BRLCAD_INSTALL_PREFIX
+  const QString mgedPath =
+      QDir(QStringLiteral(BRLCAD_INSTALL_PREFIX)).filePath(QStringLiteral("bin/mged"));
+  if (!QFileInfo::exists(mgedPath))
     return std::nullopt;
-  if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+
+  auto runMged = [&](const QStringList &arguments) {
+    QProcess process;
+    process.start(mgedPath, arguments);
+    if (!process.waitForStarted(5000)) {
+      std::fprintf(stderr,
+          "makeExampleBrlcadDb: failed to start mged: %s\n",
+          process.errorString().toStdString().c_str());
+      return false;
+    }
+    if (!process.waitForFinished(10000)) {
+      process.kill();
+      process.waitForFinished();
+    }
+
+    const QByteArray stderrOutput = process.readAllStandardError();
+    const QByteArray stdoutOutput = process.readAllStandardOutput();
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+      const std::string commandLine =
+          QStringList(QStringList{mgedPath} + arguments).join(QLatin1Char(' ')).toStdString();
+      std::fprintf(stderr,
+          "makeExampleBrlcadDb: mged failed (exitStatus=%d exitCode=%d): %s\n",
+          int(process.exitStatus()),
+          process.exitCode(),
+          commandLine.c_str());
+      if (!stderrOutput.isEmpty()) {
+        std::fprintf(stderr,
+            "makeExampleBrlcadDb: mged stderr:\n%s\n",
+            stderrOutput.constData());
+      }
+      if (!stdoutOutput.isEmpty()) {
+        std::fprintf(stderr,
+            "makeExampleBrlcadDb: mged stdout:\n%s\n",
+            stdoutOutput.constData());
+      }
+      return false;
+    }
+
+    return true;
+  };
+
+  if (!runMged({QStringLiteral("-c"),
+          dbPath,
+          QStringLiteral("in"),
+          QStringLiteral("ball.s"),
+          QStringLiteral("sph"),
+          QStringLiteral("0"),
+          QStringLiteral("0"),
+          QStringLiteral("0"),
+          QStringLiteral("1")}))
     return std::nullopt;
+  if (!runMged({QStringLiteral("-c"),
+          dbPath,
+          QStringLiteral("in"),
+          QStringLiteral("box.s"),
+          QStringLiteral("rpp"),
+          QStringLiteral("2"),
+          QStringLiteral("4"),
+          QStringLiteral("-1"),
+          QStringLiteral("1"),
+          QStringLiteral("-1"),
+          QStringLiteral("1")}))
+    return std::nullopt;
+  if (!runMged({QStringLiteral("-c"),
+          dbPath,
+          QStringLiteral("r"),
+          QStringLiteral("ball.r"),
+          QStringLiteral("u"),
+          QStringLiteral("ball.s")}))
+    return std::nullopt;
+  if (!runMged({QStringLiteral("-c"),
+          dbPath,
+          QStringLiteral("r"),
+          QStringLiteral("box.r"),
+          QStringLiteral("u"),
+          QStringLiteral("box.s")}))
+    return std::nullopt;
+  if (!runMged({QStringLiteral("-c"),
+          dbPath,
+          QStringLiteral("r"),
+          QStringLiteral("box_n_ball.r"),
+          QStringLiteral("u"),
+          QStringLiteral("ball.s"),
+          QStringLiteral("u"),
+          QStringLiteral("box.s")}))
+    return std::nullopt;
+
   if (!QFileInfo::exists(dbPath))
     return std::nullopt;
 
   return dbPath;
+#else
+  return std::nullopt;
+#endif
 }
 
 bool frameHasNonZeroPixel(const uint32_t *pixels, int width, int height)
@@ -764,13 +863,13 @@ void IbrtTests::systemWorkerReloadDifferentObjectChangesFrame()
     QSKIP(qPrintable(client.lastError()));
 
   const auto ballResult =
-      loadWorkerExampleScene(client, *dbPath, QStringLiteral("ball.s"));
+      loadWorkerExampleScene(client, *dbPath, QStringLiteral("ball.r"));
   QVERIFY(ballResult.success);
   const QImage ballFrame = renderWorkerUntilImageReady(client);
   QVERIFY(!ballFrame.isNull());
 
   const auto boxResult =
-      loadWorkerExampleScene(client, *dbPath, QStringLiteral("box.s"));
+      loadWorkerExampleScene(client, *dbPath, QStringLiteral("box.r"));
   QVERIFY(boxResult.success);
   const QImage boxFrame = renderWorkerUntilImageReady(client);
   QVERIFY(!boxFrame.isNull());
@@ -977,7 +1076,7 @@ void IbrtTests::unitWorkerIpcPipeNameUsesProcessId()
 #ifdef _WIN32
   QCOMPARE(QString::fromStdString(ibrt::ipc::makePipeName(42)),
       QStringLiteral("\\\\.\\pipe\\IBRT.RenderWorker.42"));
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
   QCOMPARE(QString::fromStdString(ibrt::ipc::makePipeName(42)),
       QStringLiteral("/tmp/ibrt_render_42.sock"));
 #else
