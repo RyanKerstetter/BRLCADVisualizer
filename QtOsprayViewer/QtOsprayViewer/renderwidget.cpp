@@ -358,7 +358,11 @@ void RenderWidget::initializeGL()
   ImGuiIO &io = ImGui::GetIO();
   io.DisplaySize = ImVec2(float(width()), float(height()));
 
+#ifdef __APPLE__
+  ImGui_ImplOpenGL3_Init("#version 150");
+#else
   ImGui_ImplOpenGL3_Init("#version 130");
+#endif
 }
 
 // Resizes the render targets to match the widget dimensions.
