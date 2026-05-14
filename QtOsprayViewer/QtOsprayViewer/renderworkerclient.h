@@ -103,7 +103,7 @@ class RenderWorkerClient : public QObject
       std::string *responsePayload);
   void closePipe();
   HANDLE pipe_ = INVALID_HANDLE_VALUE;
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
   bool connectSocket();
   bool sendPing();
   bool sendRequest(uint32_t type, const QString &payload, QString *responsePayload);

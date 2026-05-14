@@ -5,7 +5,7 @@
 
 #include <vector>
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 #include <cerrno>
 #include <unistd.h>
 #endif
@@ -16,7 +16,7 @@ std::string makePipeName(uint32_t processId)
 {
 #ifdef _WIN32
   return "\\\\.\\pipe\\IBRT.RenderWorker." + std::to_string(processId);
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
   return "/tmp/ibrt_render_" + std::to_string(processId) + ".sock";
 #else
   return "IBRT.RenderWorker." + std::to_string(processId);
@@ -97,7 +97,7 @@ bool readMessage(HANDLE pipe, Message &message)
   message.payload.assign(buffer.begin(), buffer.end());
   return true;
 }
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
 namespace {
 
 bool writeAll(int fd, const void *data, size_t size)
