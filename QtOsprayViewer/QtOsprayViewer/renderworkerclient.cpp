@@ -8,8 +8,9 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QThread>
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -17,6 +18,23 @@
 
 #include <cstring>
 #include <string>
+
+namespace {
+
+QString withOsprayModule(const QString &modules, const QString &moduleName)
+{
+  const auto entries = modules.split(QLatin1Char(','), Qt::SkipEmptyParts);
+  for (const QString &entry : entries) {
+    if (entry.trimmed() == moduleName)
+      return modules;
+  }
+
+  if (modules.trimmed().isEmpty())
+    return moduleName;
+  return modules + QLatin1Char(',') + moduleName;
+}
+
+} // namespace
 
 RenderWorkerClient::RenderWorkerClient(QObject *parent) : QObject(parent)
 {
@@ -30,7 +48,7 @@ RenderWorkerClient::RenderWorkerClient(QObject *parent) : QObject(parent)
         lastError_ = process_->errorString();
 #ifdef _WIN32
         closePipe();
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
         closeSocket();
 #endif
         setConnected(false);
@@ -41,7 +59,7 @@ RenderWorkerClient::RenderWorkerClient(QObject *parent) : QObject(parent)
       [this](int, QProcess::ExitStatus exitStatus) {
 #ifdef _WIN32
         closePipe();
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
         closeSocket();
 #endif
         if (stopInProgress_)
@@ -61,7 +79,7 @@ bool RenderWorkerClient::isSupported()
 {
 #ifdef _WIN32
   return true;
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
   return true;
 #else
   return false;
@@ -72,7 +90,7 @@ QString RenderWorkerClient::executableFileName()
 {
 #ifdef _WIN32
   return QStringLiteral("IBRTRenderWorker.exe");
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
   return QStringLiteral("IBRTRenderWorker");
 #else
   return QStringLiteral("IBRTRenderWorker");
@@ -86,7 +104,7 @@ QString RenderWorkerClient::defaultWorkerPath(const QString &applicationDirPath)
 
 bool RenderWorkerClient::start(const QString &workerPath)
 {
-#if !defined(_WIN32) && !defined(__linux__)
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
   Q_UNUSED(workerPath);
   lastError_ = QStringLiteral("Render worker is currently implemented for Windows and Linux only.");
   return false;
@@ -95,6 +113,11 @@ bool RenderWorkerClient::start(const QString &workerPath)
   stop();
 
   process_->setProcessChannelMode(QProcess::ForwardedChannels);
+  QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+  environment.insert(QStringLiteral("OSPRAY_LOAD_MODULES"),
+      withOsprayModule(
+          environment.value(QStringLiteral("OSPRAY_LOAD_MODULES")), QStringLiteral("brl_cad")));
+  process_->setProcessEnvironment(environment);
 
 #ifdef _WIN32
   pipeName_ =
@@ -149,7 +172,7 @@ void RenderWorkerClient::stop()
   stopInProgress_ = true;
 #ifdef _WIN32
   closePipe();
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
   closeSocket();
 #endif
 
@@ -174,7 +197,7 @@ QString RenderWorkerClient::lastError() const
 
 QStringList RenderWorkerClient::listBrlcadObjects(const QString &path)
 {
-#if !defined(_WIN32) && !defined(__linux__)
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
   Q_UNUSED(path);
   return {};
 #else
@@ -195,7 +218,7 @@ QStringList RenderWorkerClient::listBrlcadObjects(const QString &path)
 RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadObj(const QString &path)
 {
   SceneLoadResult result;
-#if !defined(_WIN32) && !defined(__linux__)
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
   Q_UNUSED(path);
   result.errorMessage = QStringLiteral("Render worker is currently implemented for Windows and Linux only.");
   lastError_ = result.errorMessage;
@@ -242,7 +265,7 @@ RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadBrlcad(
     const QString &path, const QString &objectName)
 {
   SceneLoadResult result;
-#if !defined(_WIN32) && !defined(__linux__)
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
   Q_UNUSED(path);
   Q_UNUSED(objectName);
   result.errorMessage = QStringLiteral("Render worker is currently implemented for Windows and Linux only.");
@@ -290,7 +313,7 @@ RenderWorkerClient::SceneLoadResult RenderWorkerClient::loadBrlcad(
 
 bool RenderWorkerClient::resize(int width, int height)
 {
-#if !defined(_WIN32) && !defined(__linux__)
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
   Q_UNUSED(width);
   Q_UNUSED(height);
   return false;
@@ -310,7 +333,7 @@ bool RenderWorkerClient::setCamera(const rkcommon::math::vec3f &eye,
     const rkcommon::math::vec3f &up,
     float fovyDeg)
 {
-#if !defined(_WIN32) && !defined(__linux__)
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
   Q_UNUSED(eye);
   Q_UNUSED(center);
   Q_UNUSED(up);
@@ -338,7 +361,7 @@ bool RenderWorkerClient::setCamera(const rkcommon::math::vec3f &eye,
 
 bool RenderWorkerClient::resetAccumulation()
 {
-#if !defined(_WIN32) && !defined(__linux__)
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
   return false;
 #else
   std::string response;
@@ -350,7 +373,7 @@ bool RenderWorkerClient::resetAccumulation()
 
 bool RenderWorkerClient::setRenderer(const QString &rendererType)
 {
-#if !defined(_WIN32) && !defined(__linux__)
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
   Q_UNUSED(rendererType);
   return false;
 #else
@@ -364,7 +387,7 @@ bool RenderWorkerClient::setRenderer(const QString &rendererType)
 
 bool RenderWorkerClient::setRenderSettings(const RenderSettingsState &settings)
 {
-#if !defined(_WIN32) && !defined(__linux__)
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
   Q_UNUSED(settings);
   return false;
 #else
@@ -411,7 +434,7 @@ bool RenderWorkerClient::setRenderSettings(const RenderSettingsState &settings)
 
 bool RenderWorkerClient::setInteracting(bool interacting)
 {
-#if !defined(_WIN32) && !defined(__linux__)
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
   Q_UNUSED(interacting);
   return false;
 #else
@@ -426,7 +449,7 @@ bool RenderWorkerClient::setInteracting(bool interacting)
 RenderWorkerClient::FrameResult RenderWorkerClient::requestFrame()
 {
   FrameResult result;
-#if !defined(_WIN32) && !defined(__linux__)
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
   return result;
 #else
   std::string payload;
@@ -611,7 +634,7 @@ void RenderWorkerClient::closePipe()
     pipe_ = INVALID_HANDLE_VALUE;
   }
 }
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
 bool RenderWorkerClient::connectSocket()
 {
   const std::string path = pipeName_.toStdString();
