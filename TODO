@@ -30,6 +30,8 @@ CLEANUP
 
 * fix so only dirbuilding/prep once, unless we hard-reset
 
+* consolidate/generalize the linux+mac sections
+
 
 NEW STUFF
 
