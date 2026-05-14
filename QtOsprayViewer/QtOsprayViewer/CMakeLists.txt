@@ -4,14 +4,14 @@
 cmake_minimum_required(VERSION 3.20)
 project(IBRT VERSION 0.1 LANGUAGES CXX)
 set(IBRT_RENDER_WORKER_DEFAULT OFF)
-if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(IBRT_RENDER_WORKER_DEFAULT ON)
 endif()
 option(IBRT_ENABLE_RENDER_WORKER "Build the out-of-process render worker" ${IBRT_RENDER_WORKER_DEFAULT})
 
 set(IBRT_BUILD_RENDER_WORKER ${IBRT_ENABLE_RENDER_WORKER})
-if(IBRT_ENABLE_RENDER_WORKER AND NOT (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
-    message(STATUS "IBRT render worker is supported only on Windows and Linux; this build will use in-process rendering only.")
+if(IBRT_ENABLE_RENDER_WORKER AND NOT (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin"))
+    message(STATUS "IBRT render worker is supported only on Windows, macOS, and Linux; this build will use in-process rendering only.")
     set(IBRT_BUILD_RENDER_WORKER OFF)
 elseif(NOT IBRT_ENABLE_RENDER_WORKER)
     message(STATUS "IBRT render worker target is disabled; the viewer will use local rendering only.")
@@ -215,6 +215,10 @@ target_compile_definitions(QtOsprayViewer PRIVATE
     BRLCAD_INSTALL_PREFIX="${BRLCAD_PREFIX}"
 )
 
+target_compile_definitions(IBRTTests PRIVATE
+    BRLCAD_INSTALL_PREFIX="${BRLCAD_PREFIX}"
+)
+
 target_link_libraries(QtOsprayViewer PRIVATE
     Qt6::Widgets
     Qt6::OpenGLWidgets
@@ -233,7 +237,7 @@ if(TARGET IBRTRenderWorker)
         ${BRLCAD_BU_LIBRARY}
         $<$<BOOL:${WIN32}>:TBB::tbb>
     )
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         target_link_libraries(IBRTRenderWorker PRIVATE Qt6::Core)
     endif()
 endif()
@@ -248,7 +252,7 @@ target_link_libraries(IBRTTests PRIVATE
     $<$<BOOL:${WIN32}>:TBB::tbb>
 )
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set_target_properties(QtOsprayViewer PROPERTIES
         INSTALL_RPATH "${OSPRAY_PREFIX}/lib;${RKCOMMON_PREFIX}/lib;${BRLCAD_PREFIX}/lib"
         BUILD_RPATH   "${OSPRAY_PREFIX}/lib;${RKCOMMON_PREFIX}/lib;${BRLCAD_PREFIX}/lib"
@@ -492,7 +496,7 @@ if(WIN32 AND TARGET IBRTRenderWorker)
     add_custom_command(TARGET IBRTTests POST_BUILD
         COMMAND "${WINDEPLOYQT}" "$<TARGET_FILE:IBRTTests>"
         COMMENT "Running windeployqt for tests...")
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET IBRTRenderWorker)
+elseif((CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin") AND TARGET IBRTRenderWorker)
     add_dependencies(QtOsprayViewer IBRTRenderWorker)
     add_custom_command(TARGET QtOsprayViewer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
