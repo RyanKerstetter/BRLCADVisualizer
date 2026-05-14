@@ -3,6 +3,7 @@
 
 #include <QApplication>
 #include <QMessageBox>
+#include <QSurfaceFormat>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -166,6 +167,24 @@ static void installCrashDumpHandler()
 }
 #endif
 
+// Requests the BRL-CAD module during OSPRay startup so child worker processes
+// inherit the same module set and BRL-CAD geometry is registered before use.
+static void ensureOsprayLoadModule(const char *moduleName)
+{
+  const QByteArray module(moduleName);
+  QByteArray modules = qgetenv("OSPRAY_LOAD_MODULES");
+  const QList<QByteArray> existing = modules.split(',');
+  for (const QByteArray &entry : existing) {
+    if (entry.trimmed() == module)
+      return;
+  }
+
+  if (!modules.isEmpty() && !modules.endsWith(','))
+    modules.append(',');
+  modules.append(module);
+  qputenv("OSPRAY_LOAD_MODULES", modules);
+}
+
 // Forwards OSPRay errors to stderr using the application's logging format.
 static void osprayErrorCallback(void *, OSPError error, const char *message)
 {
@@ -199,6 +218,21 @@ int main(int argc, char *argv[])
   // Install platform-specific diagnostics before OSPRay or Qt start doing work.
   installStderrFilter();
   installCrashDumpHandler();
+#endif
+
+  ensureOsprayLoadModule("brl_cad");
+
+  // NOTE; have to manually initialize OpenGL on Mac or it'll default
+  // to 2.1 and reduced features.  Qt supports metal, so we should get
+  // that working instead, but will require coordination with imgui.
+#ifdef __APPLE__
+  QSurfaceFormat glFormat;
+  glFormat.setRenderableType(QSurfaceFormat::OpenGL);
+  glFormat.setVersion(4, 1);
+  glFormat.setProfile(QSurfaceFormat::CoreProfile);
+  glFormat.setDepthBufferSize(24);
+  glFormat.setStencilBufferSize(8);
+  QSurfaceFormat::setDefaultFormat(glFormat);
 #endif
 
   int ac = argc;
