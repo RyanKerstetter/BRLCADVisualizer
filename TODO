@@ -35,6 +35,16 @@ CLEANUP
 
 NEW STUFF
 
+* tackle docs/perf/ibrt-moss-performance-plan.md
+
+* non-GUI CLI rendering mode
+
+* rt-compatible CLI
+
+* add lighting controls (increase/decrease brightness)
+
+* orthogonal views
+
 * debug overlay console
 
 * BRL-CAD branding in corner
