@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -31,6 +33,12 @@ namespace brlcad {
 //  - BRLCAD_intersect (ISPC) reads getSh()->brlcadSelf to reach this object
 struct BRLCAD : public AddStructShared<Geometry, ispc::BRLCAD_sh>
 {
+  struct OverflowResourceBlock
+  {
+    size_t count = 0;
+    std::unique_ptr<resource[]> data;
+  };
+
   BRLCAD(api::ISPCDevice &device);
   ~BRLCAD() override;
 
@@ -44,7 +52,11 @@ struct BRLCAD : public AddStructShared<Geometry, ispc::BRLCAD_sh>
   application ap;
   rt_i *rtip{nullptr};
 
+  std::atomic<uint64_t> instanceId{0};
   mutable std::vector<resource> resources;
+  mutable std::vector<std::unique_ptr<OverflowResourceBlock>> overflowResourceBlocks;
+  mutable std::atomic<OverflowResourceBlock *> activeOverflowResources{nullptr};
+  mutable std::atomic<bool> overflowExpansionInProgress{false};
   std::vector<std::string> objects;
 };
 

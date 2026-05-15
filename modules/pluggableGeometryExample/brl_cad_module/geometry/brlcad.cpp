@@ -3,9 +3,11 @@
 
 #include "brlcad.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -34,6 +36,8 @@ static inline int getCpuId()
   return cpuId;
 }
 
+static std::atomic<uint64_t> g_nextBrlcadInstanceId{1};
+
 // ---------------------------------------------------------------------------
 // CSV helper
 // ---------------------------------------------------------------------------
@@ -54,6 +58,87 @@ static inline int getNumThreads()
 {
   const unsigned int hc = std::thread::hardware_concurrency();
   return hc > 0 ? static_cast<int>(hc) : 1;
+}
+
+static void cleanupTrackedResources(BRLCAD &geom)
+{
+  if (!geom.rtip)
+    return;
+
+  for (auto &res : geom.resources)
+    rt_clean_resource_complete(geom.rtip, &res);
+
+  for (const auto &block : geom.overflowResourceBlocks) {
+    if (!block || !block->data)
+      continue;
+    for (size_t i = 0; i < block->count; ++i)
+      rt_clean_resource_complete(geom.rtip, &block->data[i]);
+  }
+}
+
+static resource *ensureOverflowResource(const BRLCAD &geom, size_t cpuId)
+{
+  const size_t primaryCount = geom.resources.size();
+  const size_t overflowIndex = cpuId - primaryCount;
+
+  for (;;) {
+    BRLCAD::OverflowResourceBlock *overflow =
+        geom.activeOverflowResources.load(std::memory_order_acquire);
+    if (overflow && overflowIndex < overflow->count)
+      return &overflow->data[overflowIndex];
+
+    bool expected = false;
+    if (!geom.overflowExpansionInProgress.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
+      std::this_thread::yield();
+      continue;
+    }
+
+    struct ExpansionGuard
+    {
+      std::atomic<bool> &flag;
+      ~ExpansionGuard()
+      {
+        flag.store(false, std::memory_order_release);
+      }
+    } guard{geom.overflowExpansionInProgress};
+
+    overflow = geom.activeOverflowResources.load(std::memory_order_acquire);
+    if (overflow && overflowIndex < overflow->count)
+      return &overflow->data[overflowIndex];
+
+    const size_t currentCount = overflow ? overflow->count : 0;
+    const size_t growth = std::max(primaryCount, size_t(8));
+    auto block = std::make_unique<BRLCAD::OverflowResourceBlock>();
+    block->count = std::max(overflowIndex + 1, currentCount + growth);
+    block->data = std::make_unique<resource[]>(block->count);
+    for (size_t i = 0; i < block->count; ++i)
+      rt_init_resource(&block->data[i], int(primaryCount + i), geom.rtip);
+
+    BRLCAD::OverflowResourceBlock *blockPtr = block.get();
+    geom.overflowResourceBlocks.push_back(std::move(block));
+    geom.activeOverflowResources.store(blockPtr, std::memory_order_release);
+    return &blockPtr->data[overflowIndex];
+  }
+}
+
+static resource *selectResourceForThread(const BRLCAD &geom, uint64_t currentInstanceId)
+{
+  thread_local resource *tl_res = nullptr;
+  thread_local uint64_t tl_instanceId = 0;
+
+  if (tl_instanceId == currentInstanceId && tl_res)
+    return tl_res;
+
+  const size_t cpuId = size_t(getCpuId());
+  if (cpuId < geom.resources.size()) {
+    tl_res = &geom.resources[cpuId];
+  } else {
+    tl_res = ensureOverflowResource(geom, cpuId);
+  }
+
+  tl_instanceId = currentInstanceId;
+  return tl_res;
 }
 
 static constexpr bool kVerboseBRLCADLogging = false;
@@ -201,10 +286,8 @@ static void traceRay(const BRLCAD &geom, RTCRayHit &rayhit, unsigned int geomID)
 
   ap.a_rt_i = geom.rtip;
   ap.a_onehit = 1;
-  const size_t resourceIndex =
-      geom.resources.empty() ? 0 : (size_t(getCpuId()) % geom.resources.size());
-  ap.a_resource =
-      geom.resources.empty() ? nullptr : const_cast<resource *>(&geom.resources[resourceIndex]);
+  ap.a_resource = selectResourceForThread(
+      geom, geom.instanceId.load(std::memory_order_acquire));
   ap.a_user = static_cast<int>(geomID);
 
   VSET(ap.a_ray.r_pt, ray.org_x, ray.org_y, ray.org_z);
@@ -313,8 +396,9 @@ extern "C" void brlcadIntersectN_C(void *self,
 // ---------------------------------------------------------------------------
 
 BRLCAD::BRLCAD(api::ISPCDevice &device)
-    : AddStructShared(device.getDRTDevice(), device, FFG_BOX)
+    : AddStructShared(device.getIspcrtContext(), device, FFG_BOX)
 {
+  instanceId.store(g_nextBrlcadInstanceId.fetch_add(1), std::memory_order_relaxed);
 #ifndef OSPRAY_TARGET_SYCL
   getSh()->super.type = ispc::GEOMETRY_TYPE_UNKNOWN;
   getSh()->super.postIntersect =
@@ -328,8 +412,7 @@ BRLCAD::BRLCAD(api::ISPCDevice &device)
 BRLCAD::~BRLCAD()
 {
   if (rtip) {
-    for (auto &res : resources)
-      rt_clean_resource_complete(rtip, &res);
+    cleanupTrackedResources(*this);
     rt_free_rti(rtip);
     rtip = nullptr;
   }
@@ -342,6 +425,8 @@ size_t BRLCAD::numPrimitives() const
 
 void BRLCAD::commit()
 {
+  instanceId.store(
+      g_nextBrlcadInstanceId.fetch_add(1), std::memory_order_release);
   getSh()->super.type = ispc::GEOMETRY_TYPE_UNKNOWN;
 #ifndef OSPRAY_TARGET_SYCL
   getSh()->super.postIntersect =
@@ -351,11 +436,14 @@ void BRLCAD::commit()
       ispc::BRLCAD_intersect_addr());
 #endif
   if (rtip) {
-    for (auto &res : resources)
-      rt_clean_resource_complete(rtip, &res);
+    cleanupTrackedResources(*this);
     rt_free_rti(rtip);
     rtip = nullptr;
   }
+  resources.clear();
+  overflowResourceBlocks.clear();
+  activeOverflowResources.store(nullptr, std::memory_order_release);
+  overflowExpansionInProgress.store(false, std::memory_order_release);
   const std::string filename = getParam<std::string>("filename", "");
   if (filename.empty())
     throw std::runtime_error("BRL-CAD geometry requires 'filename' parameter");
@@ -367,8 +455,6 @@ void BRLCAD::commit()
   rtip = rt_dirbuild(filename.c_str(), nullptr, 0);
   if (rtip == nullptr)
     throw std::runtime_error("Failed to open BRL-CAD database: " + filename);
-
-  resources.clear();
 
   objects.clear();
   auto objNames = splitCSV(objectList);
@@ -388,21 +474,20 @@ void BRLCAD::commit()
     objects.emplace_back(allObj);
   }
 
-  resources.resize(nThreads);
-  for (int i = 0; i < nThreads; ++i) {
-    rt_init_resource(&resources[i], i, rtip);
+  resources.reserve(size_t(std::max(nThreads, 1)));
+  for (int cpu = 0; cpu < std::max(nThreads, 1); ++cpu) {
+    resources.emplace_back();
+    rt_init_resource(&resources.back(), cpu, rtip);
   }
   rt_prep_parallel(rtip, nThreads);
 
-  if (rtip->Regions && rtip->nregions > 0) {
-    for (size_t i = 0; i < rtip->nregions; ++i) {
-      region *reg = rtip->Regions[i];
-      if (!reg)
-        continue;
-
-      rt_region_color_map(reg);
-    }
-  }
+  rt_iterate_regions(rtip,
+      [](region *reg, void *) -> int {
+        if (reg)
+          rt_region_color_map(reg);
+        return 0;
+      },
+      nullptr);
 
   bounds.lower.x = rtip->mdl_min[0];
   bounds.lower.y = rtip->mdl_min[1];
